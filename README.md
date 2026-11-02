@@ -4,15 +4,18 @@
 
 | 平台 | 接入方式 | 状态 |
 |---|---|---|
+| 视频号 | 扫码登录 + 浏览器自动化（Chrome） | 已完成：扫码登录、登录检测、发布、定时发表 |
 | 微信公众号 | 微信开放平台第三方平台授权，草稿 + 发表（非群发） | 待开发 |
-| 抖音 / 视频号 | 扫码登录 + Playwright（social-auto-upload） | 待开发 |
+| 抖音 | 扫码登录 + 浏览器自动化 | 待开发 |
 | 快手 | 快手开放平台 OAuth（`user_video_publish`） | 等待权限审批 |
+
+开发约定、环境注意事项和待办见 [AGENTS.md](AGENTS.md)。
 
 ## 目录
 
 - `backend/`：FastAPI + SQLAlchemy + Celery
 - `frontend/`：Vue 3 + Element Plus（Vite）
-- `compose.yaml`：开发环境（PostgreSQL、Redis、backend、worker、frontend）
+- `compose.yaml`：开发环境（PostgreSQL、Redis、backend、worker、browser-worker、beat、frontend）
 
 ## 本地开发（VirtualBuddy 虚拟机 + 宿主机 Docker）
 
