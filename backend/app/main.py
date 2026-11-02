@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import Base, engine
-from app.routers import accounts, auth
+from app.routers import accounts, auth, posts
 
 
 @asynccontextmanager
@@ -16,6 +16,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Matrix Publishing", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(accounts.router)
+app.include_router(posts.router)
 
 
 @app.get("/api/health")

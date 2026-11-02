@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # 对外访问地址，用于拼接授权回调
     public_base_url: str = "http://127.0.0.1:5173"
 
+    # 上传的视频、失败截图；backend 与 browser-worker 共享同一个卷
+    media_dir: str = "/data/media"
+    debug_dir: str = "/data/debug"
+
+    # 浏览器自动化：生产环境保持 headless
+    browser_headless: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import AccountStatus, Platform, UserRole
+from app.models import AccountStatus, Platform, PublishStatus, UserRole
 
 
 class RegisterIn(BaseModel):
@@ -48,3 +48,31 @@ class AccountOut(BaseModel):
 
 class AccountUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
+
+
+class LoginStartOut(BaseModel):
+    login_id: str
+
+
+class LoginStatusOut(BaseModel):
+    # starting / waiting / scanned / verifying / success / failed
+    status: str
+    message: str
+    qr: str | None = None
+    account_id: int | None = None
+
+
+class PublishTaskOut(BaseModel):
+    id: int
+    post_id: int
+    title: str
+    account_id: int | None
+    account_name: str
+    platform: Platform
+    status: PublishStatus
+    error: str | None
+    has_screenshot: bool
+    scheduled_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime

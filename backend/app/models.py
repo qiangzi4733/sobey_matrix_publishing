@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -18,6 +18,14 @@ class AccountStatus(str, enum.Enum):
     active = "active"
     expired = "expired"  # 授权或登录失效，需要客户重新授权/扫码
     error = "error"
+
+
+class PublishStatus(str, enum.Enum):
+    scheduled = "scheduled"  # 等到 scheduled_at 再入队
+    queued = "queued"
+    running = "running"
+    success = "success"
+    failed = "failed"
 
 
 class UserRole(str, enum.Enum):
@@ -73,3 +81,42 @@ class Account(Timestamped, Base):
     # 加密后的凭证 JSON（refresh_token / cookie storage_state 等），见 app.security
     credentials_encrypted: Mapped[str | None] = mapped_column(Text)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Post(Timestamped, Base):
+    """一次发布的内容，可以同时发到多个账号（每个账号一条 PublishTask）。"""
+
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 相对 media_dir 的路径
+    video_path: Mapped[str] = mapped_column(String(500))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    tasks: Mapped[list["PublishTask"]] = relationship(back_populates="post")
+
+
+class PublishTask(Timestamped, Base):
+    __tablename__ = "publish_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), index=True)
+    # 账号被移除后保留发布记录
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    account_name: Mapped[str] = mapped_column(String(100))
+    platform: Mapped[Platform] = mapped_column(Enum(Platform, native_enum=False))
+    status: Mapped[PublishStatus] = mapped_column(Enum(PublishStatus, native_enum=False), index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    # 失败现场截图，相对 debug_dir
+    screenshot_path: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    post: Mapped[Post] = relationship(back_populates="tasks")
+    account: Mapped[Account | None] = relationship()
