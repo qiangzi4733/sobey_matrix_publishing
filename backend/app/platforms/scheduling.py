@@ -18,6 +18,8 @@ def validate_native_schedule(platform: Platform, when: datetime) -> None:
     min_lead, max_ahead = NATIVE_SCHEDULE[platform]
     now = datetime.now(UTC)
     if when < now + min_lead:
-        raise ValueError(f"定时发布时间至少要在 {int(min_lead.total_seconds() // 60)} 分钟之后")
+        minutes = int(min_lead.total_seconds() // 60)
+        lead = f"{minutes // 60} 小时" if minutes % 60 == 0 else f"{minutes} 分钟"
+        raise ValueError(f"定时发布时间至少要在 {lead}之后")
     if when > now + max_ahead:
         raise ValueError(f"定时发布最多只能设置 {max_ahead.days} 天内")
