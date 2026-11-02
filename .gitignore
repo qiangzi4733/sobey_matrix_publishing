@@ -1,0 +1,15 @@
+# 本机/密钥配置
+.env
+.env.docker-host
+compose.*.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+dist/
+
+.DS_Store

@@ -1,0 +1,83 @@
+# 开发环境。运行时源码挂载使用 Docker Engine 所在主机的路径，
+# 由 .env.docker-host 中的 HOST_PROJECT_DIR 提供（见 README）。
+# IMAGE_MIRROR 为可选的镜像站前缀（如 docker.m.daocloud.io/library/），留空则直连 Docker Hub。
+name: matrix-publishing
+
+x-backend: &backend
+  build:
+    context: ./backend
+    args:
+      PYTHON_IMAGE: ${IMAGE_MIRROR-}python:3.12-slim
+  env_file: .env
+  environment:
+    WATCHFILES_FORCE_POLLING: "true"
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_started
+
+services:
+  db:
+    image: ${IMAGE_MIRROR-}postgres:16-alpine
+    environment:
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD: matrix
+      POSTGRES_DB: matrix
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: ${IMAGE_MIRROR-}redis:7-alpine
+    volumes:
+      - redis-data:/data
+
+  backend:
+    <<: *backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - type: bind
+        source: "${HOST_PROJECT_DIR:?HOST_PROJECT_DIR must be set to the Docker host path}/backend/app"
+        target: /app/app
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *backend
+    command: watchfiles --filter python "celery -A app.worker.celery_app worker -l info" app
+    volumes:
+      - type: bind
+        source: "${HOST_PROJECT_DIR:?HOST_PROJECT_DIR must be set to the Docker host path}/backend/app"
+        target: /app/app
+        bind:
+          create_host_path: false
+
+  frontend:
+    image: ${IMAGE_MIRROR-}node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    volumes:
+      - type: bind
+        source: "${HOST_PROJECT_DIR:?HOST_PROJECT_DIR must be set to the Docker host path}/frontend"
+        target: /app
+        bind:
+          create_host_path: false
+      # node_modules 放命名卷：避免走共享目录变慢，也避免和宿主机架构混用
+      - node-modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  db-data:
+  redis-data:
+  node-modules:
