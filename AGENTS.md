@@ -74,6 +74,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 - **不要安装或重新配置 Docker**、SSH、Docker Context。Bash 里可能需要先 `export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"`。
 - 第一次连接偶尔会报 `No route to host`，先重试，不要急着排障。
+- 宿主机地址会随虚拟机网络变化：2026-11-02 起虚拟机改为 NAT（虚拟机 `192.168.64.6`，宿主机即网关 `192.168.64.1`），旧地址 `172.16.192.6` 已不可用。连不上时先看 `route -n get default` 的网关，并用 `ssh-keyscan` 核对主机密钥指纹与已知的一致，再**征得用户同意**后更新 `~/.ssh/config` 和 `docker context update mac-host`。
 - 项目在共享目录：虚拟机路径 `/Users/qiangzi/Desktop/VirtualBuddyShared/VM-share/projects/matrix-publishing` = 宿主机路径 `/Users/qiangzi/VM-share/projects/matrix-publishing`。**运行时 bind mount 必须用宿主机路径**，由 `.env.docker-host` 的 `HOST_PROJECT_DIR` 提供。
 - 端口发布在**宿主机**的 127.0.0.1 上，不在虚拟机里。虚拟机里访问前端要开 SSH 隧道（见下）。
 - 未经用户同意不要执行 `docker system prune`、`docker volume prune`、`docker compose down -v` 等清理操作。
@@ -96,7 +97,7 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 - 在虚拟机里打开前端：
 
   ```bash
-  ssh -N -L 15173:127.0.0.1:5173 qiangzi@172.16.192.6
+  ssh -N -L 15173:127.0.0.1:5173 qiangzi@192.168.64.1
   ```
 
   然后访问 http://127.0.0.1:15173 。后端在宿主机 127.0.0.1:8000，测试 API 通常直接在 backend 容器里用 httpx 请求 `http://localhost:8000`。

@@ -35,7 +35,7 @@ docker compose --env-file .env.docker-host logs -f backend
 端口只绑定在宿主机的 127.0.0.1：前端 5173、后端 8000。在虚拟机里访问前端需要开 SSH 隧道：
 
 ```bash
-ssh -N -L 15173:127.0.0.1:5173 qiangzi@172.16.192.6
+ssh -N -L 15173:127.0.0.1:5173 qiangzi@192.168.64.1
 ```
 
 然后打开 http://127.0.0.1:15173 。
