@@ -13,6 +13,7 @@ from app import tasks
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
 from app.models import Account, AccountStatus, Post, PublishStatus, PublishTask
+from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
 from app.schemas import PublishTaskOut
 
 router = APIRouter(prefix="/api", tags=["publish"])
@@ -75,7 +76,12 @@ def create_post(
         if scheduled_at.tzinfo is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "定时时间需要带时区")
         if scheduled_at <= datetime.now(UTC):
-            scheduled_at = None
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "定时时间已经过去了")
+        for platform in {a.platform for a in accounts} & NATIVE_SCHEDULE.keys():
+            try:
+                validate_native_schedule(platform, scheduled_at)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
 
     relative = Path(str(user.tenant_id)) / f"{uuid.uuid4().hex}{suffix}"
     target = Path(get_settings().media_dir) / relative
@@ -92,22 +98,27 @@ def create_post(
         video_path=str(relative),
         scheduled_at=scheduled_at,
     )
-    initial = PublishStatus.scheduled if scheduled_at else PublishStatus.queued
+    def initial_status(account: Account) -> PublishStatus:
+        # 平台自带定时的现在就提交给平台；其余由 beat 到点再入队
+        if scheduled_at and account.platform not in NATIVE_SCHEDULE:
+            return PublishStatus.scheduled
+        return PublishStatus.queued
+
     post.tasks = [
         PublishTask(
             tenant_id=user.tenant_id,
             account_id=account.id,
             account_name=account.display_name,
             platform=account.platform,
-            status=initial,
+            status=initial_status(account),
         )
         for account in accounts
     ]
     db.add(post)
     db.commit()
 
-    if initial == PublishStatus.queued:
-        for task in post.tasks:
+    for task in post.tasks:
+        if task.status == PublishStatus.queued:
             tasks.enqueue_publish(task)
     return [_task_out(task) for task in post.tasks]
 

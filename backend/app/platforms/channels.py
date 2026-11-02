@@ -8,17 +8,22 @@
 """
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from patchright.sync_api import Browser, Page, Playwright, sync_playwright
 from patchright.sync_api import TimeoutError as PWTimeout
 
 from app.config import get_settings
+from app.models import Platform
 from app.platforms.base import LoginExpired, PublishError
+from app.platforms.scheduling import validate_native_schedule
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +31,9 @@ LOGIN_URL = "https://channels.weixin.qq.com"
 HOME_URL = "https://channels.weixin.qq.com/platform"
 UPLOAD_URL = "https://channels.weixin.qq.com/platform/post/create"
 QRCONNECT = "open.weixin.qq.com/connect/qrconnect"
+
+# 视频号定时发表按北京时间选择
+SCHEDULE_TZ = ZoneInfo("Asia/Shanghai")
 
 StorageState = dict[str, Any]
 
@@ -342,6 +350,50 @@ def _set_short_title(page: Page, title: str) -> None:
         field.fill(_format_short_title(title))
 
 
+def _set_schedule(page: Page, when: datetime) -> None:
+    """使用视频号自带的「定时发表」，到点由平台发布。"""
+    local = when.astimezone(SCHEDULE_TZ)
+    expected = local.strftime("%Y-%m-%d %H:%M")
+
+    section = page.locator("div.form-item").filter(has=page.locator("div.label", has_text="定时发表"))
+    section.locator("label").filter(has_text=re.compile(r"^\s*定时\s*$")).click()
+    date_input = page.locator('input[placeholder="请选择发表时间"]')
+    date_input.click()
+
+    # 翻到目标月份。日历可能停在上次选过的月份，前后都要能翻
+    labels = page.locator("span.weui-desktop-picker__panel__label")
+    for _ in range(3):
+        year, month = (int(re.sub(r"\D", "", t)) for t in labels.all_inner_texts()[:2])
+        diff = (local.year - year) * 12 + (local.month - month)
+        if diff == 0:
+            break
+        arrow = "right" if diff > 0 else "left"
+        page.locator(f"button.weui-desktop-btn__icon__{arrow}:visible").first.click(timeout=5000)
+        page.wait_for_timeout(300)
+    else:
+        raise PublishError(f"定时发表日历翻不到 {local:%Y年%m月}", _screenshot(page, "channels_schedule"))
+
+    days = page.locator("table.weui-desktop-picker__table a:not(.weui-desktop-picker__faded)")
+    day = days.filter(has_text=re.compile(rf"^\s*{local.day}\s*$")).first
+    if not day.count() or "weui-desktop-picker__disabled" in (day.get_attribute("class") or ""):
+        raise PublishError(f"视频号不允许定时到 {local:%m月%d日}", _screenshot(page, "channels_schedule"))
+    day.click()
+
+    page.locator('input[placeholder="请选择时间"]').click()
+    page.locator("ol.weui-desktop-picker__time__hour li").filter(has_text=re.compile(rf"^{local:%H}$")).click()
+    page.locator("ol.weui-desktop-picker__time__minute li").filter(has_text=re.compile(rf"^{local:%M}$")).click()
+    page.wait_for_timeout(500)
+
+    actual = date_input.input_value()
+    if actual != expected:
+        raise PublishError(f"定时时间设置不正确：期望 {expected}，实际 {actual}", _screenshot(page, "channels_schedule"))
+    # 点表单项标题收起日历浮层，免得挡住后面的按钮
+    section.locator("div.label").click()
+    page.wait_for_timeout(300)
+    if date_input.input_value() != expected:
+        raise PublishError("收起日历后定时时间被重置", _screenshot(page, "channels_schedule"))
+
+
 def _submit(page: Page) -> None:
     btn = page.get_by_role("button", name="发表", exact=True).first
     for _ in range(60):
@@ -371,8 +423,14 @@ def publish(
     title: str,
     description: str = "",
     tags: list[str] | None = None,
+    schedule_at: datetime | None = None,
 ) -> StorageState:
-    """发布一条视频，返回刷新后的 storage_state。"""
+    """发布一条视频，返回刷新后的 storage_state。schedule_at 不为空时使用视频号定时发表。"""
+    if schedule_at is not None:
+        try:
+            validate_native_schedule(Platform.channels, schedule_at)
+        except ValueError as exc:
+            raise PublishError(str(exc)) from None
     with sync_playwright() as p:
         browser = _launch(p)
         context = _new_context(browser, state)
@@ -383,6 +441,8 @@ def publish(
             _check_realtime_verification(page)
             _fill_description(page, title, tags or [], description)
             _wait_upload_complete(page, video)
+            if schedule_at is not None:
+                _set_schedule(page, schedule_at)
             _set_short_title(page, title)
             _submit(page)
             return context.storage_state()

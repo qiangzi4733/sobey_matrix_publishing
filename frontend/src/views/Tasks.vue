@@ -11,12 +11,14 @@
       </el-table-column>
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
-          <el-tag :type="STATUS[row.status].type">{{ STATUS[row.status].label }}</el-tag>
+          <!-- 平台自带定时：提交成功只代表平台已接收，到点由平台发布 -->
+          <el-tag v-if="row.status === 'success' && row.scheduled_at" type="success">已提交定时</el-tag>
+          <el-tag v-else :type="STATUS[row.status].type">{{ STATUS[row.status].label }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="时间" width="200">
         <template #default="{ row }">
-          <div v-if="row.status === 'scheduled'">定时：{{ formatTime(row.scheduled_at) }}</div>
+          <div v-if="row.scheduled_at">定时：{{ formatTime(row.scheduled_at) }}</div>
           <div v-else-if="row.finished_at">完成：{{ formatTime(row.finished_at) }}</div>
           <div v-else>提交：{{ formatTime(row.created_at) }}</div>
         </template>

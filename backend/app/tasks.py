@@ -190,6 +190,7 @@ def run_publish_task(task_id: int) -> None:
                 title=post.title,
                 description=post.description,
                 tags=post.tags,
+                schedule_at=post.scheduled_at,
             )
             account.credentials_encrypted = encrypt_credentials({"storage_state": new_state})
             task.status = PublishStatus.success

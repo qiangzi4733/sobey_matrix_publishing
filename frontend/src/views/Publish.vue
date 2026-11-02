@@ -26,7 +26,10 @@
         <div v-if="!accounts.length" class="tip">还没有可发布的账号，请先到「账号管理」添加</div>
       </el-form-item>
       <el-form-item label="定时发布">
-        <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
+        <div>
+          <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
+          <div class="tip">视频号：需在 10 分钟后、30 天内，提交后由视频号到点自动发布</div>
+        </div>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" native-type="submit" :loading="submitting">提交发布</el-button>
