@@ -13,7 +13,7 @@
           <el-dropdown-menu>
             <el-dropdown-item command="channels">扫码登录视频号</el-dropdown-item>
             <el-dropdown-item command="wechat_mp" disabled>授权微信公众号（开发中）</el-dropdown-item>
-            <el-dropdown-item command="douyin" disabled>扫码登录抖音（开发中）</el-dropdown-item>
+            <el-dropdown-item command="douyin">扫码登录抖音</el-dropdown-item>
             <el-dropdown-item command="kuaishou" disabled>授权快手（权限申请中）</el-dropdown-item>
           </el-dropdown-menu>
         </template>

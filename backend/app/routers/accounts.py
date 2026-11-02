@@ -2,15 +2,12 @@ from celery.exceptions import TimeoutError as CeleryTimeout
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app import login_sessions, tasks
+from app import login_sessions, tasks, verification
 from app.deps import CurrentUser, DbSession
 from app.models import Account, Platform
-from app.schemas import AccountOut, AccountUpdate, LoginStartOut, LoginStatusOut
+from app.schemas import AccountOut, AccountUpdate, CodeIn, LoginStartOut, LoginStatusOut
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
-
-# 扫码登录类平台对应的登录任务；抖音接入后加到这里
-LOGIN_TASKS = {Platform.channels: tasks.channels_login}
 
 
 def _get_owned(db: DbSession, user: CurrentUser, account_id: int) -> Account:
@@ -47,7 +44,7 @@ def delete_account(account_id: int, db: DbSession, user: CurrentUser) -> None:
 def check_account(account_id: int, db: DbSession, user: CurrentUser) -> Account:
     """立即检测登录状态（同步等待浏览器检测结果）。"""
     account = _get_owned(db, user, account_id)
-    if account.platform not in LOGIN_TASKS:
+    if account.platform not in tasks.BROWSER_PLATFORMS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "该平台不需要检测登录状态")
     result = tasks.check_account.apply_async(args=[account.id], queue=tasks.BROWSER_QUEUE)
     try:
@@ -62,17 +59,32 @@ def check_account(account_id: int, db: DbSession, user: CurrentUser) -> Account:
 @router.post("/login/{platform}", response_model=LoginStartOut)
 def start_login(platform: Platform, user: CurrentUser) -> LoginStartOut:
     """开始扫码登录。重新登录已有账号也走这里，扫码后按平台账号 ID 自动更新。"""
-    task = LOGIN_TASKS.get(platform)
-    if task is None:
+    if platform not in tasks.BROWSER_PLATFORMS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "该平台不支持扫码登录")
     login_id = login_sessions.create(user.tenant_id, platform.value)
-    task.apply_async(args=[login_id], queue=tasks.BROWSER_QUEUE)
+    tasks.qr_login.apply_async(args=[login_id], queue=tasks.BROWSER_QUEUE)
     return LoginStartOut(login_id=login_id)
+
+
+def _owned_session(login_id: str, user: CurrentUser) -> dict:
+    session = login_sessions.get(login_id)
+    if session is None or session["tenant_id"] != user.tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "登录会话不存在或已过期")
+    return session
 
 
 @router.get("/login/sessions/{login_id}", response_model=LoginStatusOut)
 def login_status(login_id: str, user: CurrentUser) -> LoginStatusOut:
-    session = login_sessions.get(login_id)
-    if session is None or session["tenant_id"] != user.tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "登录会话不存在或已过期")
+    session = _owned_session(login_id, user)
+    # 平台要求短信验证时，把验证弹窗截图代替二维码给前端展示
+    if pending := verification.pending(f"login:{login_id}"):
+        session.update(status="need_code", message=pending["message"], qr=pending["image"])
     return LoginStatusOut(**session)
+
+
+@router.post("/login/sessions/{login_id}/code", status_code=status.HTTP_204_NO_CONTENT)
+def submit_login_code(login_id: str, body: CodeIn, user: CurrentUser) -> None:
+    _owned_session(login_id, user)
+    if not verification.submit(f"login:{login_id}", body.code):
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前不需要验证码")
+    login_sessions.update(login_id, status="verifying", message="验证码已提交，正在验证")

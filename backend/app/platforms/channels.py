@@ -10,19 +10,17 @@
 import logging
 import re
 import time
-import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
-from patchright.sync_api import Browser, Page, Playwright, sync_playwright
+from patchright.sync_api import Page, sync_playwright
 from patchright.sync_api import TimeoutError as PWTimeout
 
-from app.config import get_settings
 from app.models import Platform
 from app.platforms.base import LoginExpired, PublishError
+from app.platforms.browser import AskCode, StorageState, launch, new_context, screenshot
 from app.platforms.scheduling import validate_native_schedule
 
 log = logging.getLogger(__name__)
@@ -34,34 +32,6 @@ QRCONNECT = "open.weixin.qq.com/connect/qrconnect"
 
 # 视频号定时发表按北京时间选择
 SCHEDULE_TZ = ZoneInfo("Asia/Shanghai")
-
-StorageState = dict[str, Any]
-
-
-def _launch(p: Playwright) -> Browser:
-    # 视频号上传要 Chrome 解码 H.264，Chromium 不行
-    return p.chromium.launch(channel="chrome", headless=get_settings().browser_headless)
-
-
-def _new_context(browser: Browser, state: StorageState | None = None):
-    return browser.new_context(
-        storage_state=state,
-        viewport={"width": 1440, "height": 900},
-        locale="zh-CN",
-        timezone_id="Asia/Shanghai",
-    )
-
-
-def _screenshot(page: Page, prefix: str) -> str | None:
-    debug_dir = Path(get_settings().debug_dir)
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    name = f"{prefix}_{uuid.uuid4().hex[:8]}.png"
-    try:
-        page.screenshot(path=str(debug_dir / name), full_page=True)
-        return name
-    except Exception:
-        log.exception("截图失败")
-        return None
 
 
 def _redirected_to_login(page: Page, wait_ms: int = 8000) -> bool:
@@ -128,15 +98,16 @@ def _read_profile_from_page(page: Page) -> dict[str, str]:
 def login(
     on_qr: Callable[[bytes], None],
     on_status: Callable[[str, str], None],
+    ask_code: AskCode | None = None,  # 视频号扫码登录没有短信验证，为与其他平台接口一致保留
     timeout_seconds: int = 300,
 ) -> tuple[StorageState, dict[str, str]]:
     """打开登录页，把二维码交给 on_qr，等待客户用微信扫码确认。
 
-    返回 (storage_state, profile)。profile 含 nickname / uniq_id / avatar_url（尽量获取）。
+    返回 (storage_state, profile)，profile 含 external_id（视频号 ID）/ nickname / avatar_url。
     """
     with sync_playwright() as p:
-        browser = _launch(p)
-        context = _new_context(browser)
+        browser = launch(p)
+        context = new_context(browser)
         profile: dict[str, str] = {}
 
         def capture_profile(response) -> None:
@@ -186,9 +157,13 @@ def login(
             if not profile.get("uniq_id"):
                 profile.update({k: v for k, v in _read_profile_from_page(page).items() if v})
             if not profile.get("uniq_id"):
-                shot = _screenshot(page, "channels_profile")
+                shot = screenshot(page, "channels_profile")
                 raise PublishError("登录成功但未能读取视频号 ID", shot)
-            return context.storage_state(), profile
+            return context.storage_state(), {
+                "external_id": profile["uniq_id"],
+                "nickname": profile.get("nickname", ""),
+                "avatar_url": profile.get("avatar_url", ""),
+            }
         finally:
             context.close()
             browser.close()
@@ -200,8 +175,8 @@ def login(
 def check(state: StorageState) -> StorageState:
     """打开首页验证登录状态。有效则返回刷新后的 storage_state，失效抛 LoginExpired。"""
     with sync_playwright() as p:
-        browser = _launch(p)
-        context = _new_context(browser, state)
+        browser = launch(p)
+        context = new_context(browser, state)
         try:
             page = context.new_page()
             page.goto(HOME_URL, wait_until="domcontentloaded")
@@ -265,7 +240,7 @@ def _upload_file(page: Page, video: Path) -> None:
             fi.set_input_files(str(video))
             return
         page.wait_for_timeout(1000)
-    raise PublishError("未找到视频上传框", _screenshot(page, "channels_no_input"))
+    raise PublishError("未找到视频上传框", screenshot(page, "channels_no_input"))
 
 
 def _dismiss_dialogs(page: Page) -> None:
@@ -287,7 +262,7 @@ def _dismiss_dialogs(page: Page) -> None:
 def _check_realtime_verification(page: Page) -> None:
     dialog = page.locator("div.weui-desktop-dialog__wrp:visible").filter(has_text="实名验证").first
     if dialog.count() and dialog.is_visible():
-        raise PublishError("视频号要求管理员微信扫码实名验证，请在视频号助手完成后重试", _screenshot(page, "channels_verify"))
+        raise PublishError("视频号要求管理员微信扫码实名验证，请在视频号助手完成后重试", screenshot(page, "channels_verify"))
 
 
 def _fill_description(page: Page, title: str, tags: list[str], description: str) -> None:
@@ -324,7 +299,7 @@ def _wait_upload_complete(page: Page, video: Path, timeout_seconds: int = 3600, 
             if failed and delete.count():
                 retries += 1
                 if retries > max_retries:
-                    raise PublishError(f"视频上传连续失败 {max_retries} 次", _screenshot(page, "channels_upload_failed"))
+                    raise PublishError(f"视频上传连续失败 {max_retries} 次", screenshot(page, "channels_upload_failed"))
                 log.warning("视频号上传出错，第 %s 次重试", retries)
                 delete.click()
                 page.get_by_role("button", name="删除", exact=True).click()
@@ -334,7 +309,7 @@ def _wait_upload_complete(page: Page, video: Path, timeout_seconds: int = 3600, 
         except Exception:
             pass
         page.wait_for_timeout(2000)
-    raise PublishError("视频上传超时", _screenshot(page, "channels_upload_timeout"))
+    raise PublishError("视频上传超时", screenshot(page, "channels_upload_timeout"))
 
 
 def _set_short_title(page: Page, title: str) -> None:
@@ -371,12 +346,12 @@ def _set_schedule(page: Page, when: datetime) -> None:
         page.locator(f"button.weui-desktop-btn__icon__{arrow}:visible").first.click(timeout=5000)
         page.wait_for_timeout(300)
     else:
-        raise PublishError(f"定时发表日历翻不到 {local:%Y年%m月}", _screenshot(page, "channels_schedule"))
+        raise PublishError(f"定时发表日历翻不到 {local:%Y年%m月}", screenshot(page, "channels_schedule"))
 
     days = page.locator("table.weui-desktop-picker__table a:not(.weui-desktop-picker__faded)")
     day = days.filter(has_text=re.compile(rf"^\s*{local.day}\s*$")).first
     if not day.count() or "weui-desktop-picker__disabled" in (day.get_attribute("class") or ""):
-        raise PublishError(f"视频号不允许定时到 {local:%m月%d日}", _screenshot(page, "channels_schedule"))
+        raise PublishError(f"视频号不允许定时到 {local:%m月%d日}", screenshot(page, "channels_schedule"))
     day.click()
 
     page.locator('input[placeholder="请选择时间"]').click()
@@ -386,12 +361,12 @@ def _set_schedule(page: Page, when: datetime) -> None:
 
     actual = date_input.input_value()
     if actual != expected:
-        raise PublishError(f"定时时间设置不正确：期望 {expected}，实际 {actual}", _screenshot(page, "channels_schedule"))
+        raise PublishError(f"定时时间设置不正确：期望 {expected}，实际 {actual}", screenshot(page, "channels_schedule"))
     # 点表单项标题收起日历浮层，免得挡住后面的按钮
     section.locator("div.label").click()
     page.wait_for_timeout(300)
     if date_input.input_value() != expected:
-        raise PublishError("收起日历后定时时间被重置", _screenshot(page, "channels_schedule"))
+        raise PublishError("收起日历后定时时间被重置", screenshot(page, "channels_schedule"))
 
 
 def _submit(page: Page) -> None:
@@ -414,7 +389,7 @@ def _submit(page: Page) -> None:
             page.wait_for_timeout(1000)
             if "/post/create" not in page.url or not btn.count():
                 return
-    raise PublishError("点击发表后页面没有变化", _screenshot(page, "channels_submit"))
+    raise PublishError("点击发表后页面没有变化", screenshot(page, "channels_submit"))
 
 
 def publish(
@@ -424,6 +399,7 @@ def publish(
     description: str = "",
     tags: list[str] | None = None,
     schedule_at: datetime | None = None,
+    ask_code: AskCode | None = None,  # 视频号目前没有短信验证环节，为与其他平台接口一致保留
 ) -> StorageState:
     """发布一条视频，返回刷新后的 storage_state。schedule_at 不为空时使用视频号定时发表。"""
     if schedule_at is not None:
@@ -432,8 +408,8 @@ def publish(
         except ValueError as exc:
             raise PublishError(str(exc)) from None
     with sync_playwright() as p:
-        browser = _launch(p)
-        context = _new_context(browser, state)
+        browser = launch(p)
+        context = new_context(browser, state)
         page = context.new_page()
         try:
             _open_upload_page(page)
@@ -449,7 +425,7 @@ def publish(
         except (LoginExpired, PublishError):
             raise
         except Exception as exc:
-            raise PublishError(f"发布失败：{exc}", _screenshot(page, "channels_error")) from exc
+            raise PublishError(f"发布失败：{exc}", screenshot(page, "channels_error")) from exc
         finally:
             context.close()
             browser.close()

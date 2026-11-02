@@ -1,7 +1,7 @@
 # 第三方代码声明
 
-`backend/app/platforms/channels.py` 中的视频号页面操作流程移植自
-[social-auto-upload](https://github.com/dreammis/social-auto-upload)（uploader/tencent_uploader），按其 MIT 许可证使用：
+`backend/app/platforms/channels.py`（视频号）和 `backend/app/platforms/douyin.py`（抖音）中的页面操作流程移植、参考自
+[social-auto-upload](https://github.com/dreammis/social-auto-upload)（uploader/tencent_uploader、uploader/douyin_uploader），按其 MIT 许可证使用：
 
 ```text
 MIT License

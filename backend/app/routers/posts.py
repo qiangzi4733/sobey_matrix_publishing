@@ -9,12 +9,12 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app import tasks
+from app import tasks, verification
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
 from app.models import Account, AccountStatus, Post, PublishStatus, PublishTask
 from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
-from app.schemas import PublishTaskOut
+from app.schemas import CodeIn, PublishTaskOut, VerificationOut
 
 router = APIRouter(prefix="/api", tags=["publish"])
 
@@ -36,6 +36,7 @@ def _task_out(task: PublishTask) -> PublishTaskOut:
         status=task.status,
         error=task.error,
         has_screenshot=bool(task.screenshot_path),
+        needs_code=task.status == PublishStatus.running and verification.pending(f"task:{task.id}") is not None,
         scheduled_at=task.post.scheduled_at,
         started_at=task.started_at,
         finished_at=task.finished_at,
@@ -161,3 +162,19 @@ def task_screenshot(task_id: int, db: DbSession, user: CurrentUser) -> FileRespo
     if not task.screenshot_path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "没有截图")
     return FileResponse(Path(get_settings().debug_dir) / Path(task.screenshot_path).name, media_type="image/png")
+
+
+@router.get("/publish-tasks/{task_id}/verification", response_model=VerificationOut)
+def task_verification(task_id: int, db: DbSession, user: CurrentUser) -> VerificationOut:
+    _get_task(db, user, task_id)
+    pending = verification.pending(f"task:{task_id}")
+    if pending is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "当前不需要验证码")
+    return VerificationOut(**pending)
+
+
+@router.post("/publish-tasks/{task_id}/code", status_code=status.HTTP_204_NO_CONTENT)
+def submit_task_code(task_id: int, body: CodeIn, db: DbSession, user: CurrentUser) -> None:
+    _get_task(db, user, task_id)
+    if not verification.submit(f"task:{task_id}", body.code):
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前不需要验证码")

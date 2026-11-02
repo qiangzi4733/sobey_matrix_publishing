@@ -8,7 +8,7 @@ from pathlib import Path
 
 from sqlalchemy import select, update
 
-from app import login_sessions
+from app import login_sessions, verification
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Account, AccountStatus, Platform, Post, PublishStatus, PublishTask
@@ -19,45 +19,59 @@ from app.worker import celery_app
 log = logging.getLogger(__name__)
 
 BROWSER_QUEUE = "browser"
-# 目前支持发布的平台；公众号、快手、抖音接入后再加
-PUBLISHABLE = {Platform.channels}
+# 扫码登录的平台；已支持发布的平台。公众号、快手接入后再加
 BROWSER_PLATFORMS = {Platform.channels, Platform.douyin}
+PUBLISHABLE = {Platform.channels, Platform.douyin}
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _browser_module(platform: Platform):
+    """浏览器类平台的实现模块（login / check / publish 接口一致）。"""
+    if platform == Platform.channels:
+        from app.platforms import channels
+
+        return channels
+    if platform == Platform.douyin:
+        from app.platforms import douyin
+
+        return douyin
+    raise PublishError("该平台暂不支持")
+
+
 # ---------- 扫码登录 ----------
 
 
-@celery_app.task(time_limit=420)
-def channels_login(login_id: str) -> None:
-    from app.platforms import channels
-
+@celery_app.task(time_limit=900)
+def qr_login(login_id: str) -> None:
     session = login_sessions.get(login_id)
     if session is None:
         return
     tenant_id = session["tenant_id"]
+    platform = Platform(session["platform"])
+    module = _browser_module(platform)
 
     def on_qr(png: bytes) -> None:
         login_sessions.update(
             login_id,
             status="waiting",
-            message="请用视频号管理员的微信扫码",
+            message="请用账号管理员的手机扫码",
             qr="data:image/png;base64," + base64.b64encode(png).decode(),
         )
 
     def on_status(status: str, message: str) -> None:
         login_sessions.update(login_id, status=status, message=message)
 
+    ask_code = verification.asker(f"login:{login_id}")
     try:
-        state, profile = channels.login(on_qr, on_status)
+        state, profile = module.login(on_qr, on_status, ask_code)
     except TimeoutError:
         login_sessions.update(login_id, status="failed", message="二维码已超时，请重新获取", qr=None)
         return
     except Exception as exc:
-        log.exception("视频号登录失败")
+        log.exception("扫码登录失败")
         login_sessions.update(login_id, status="failed", message=f"登录失败：{exc}", qr=None)
         return
 
@@ -65,16 +79,16 @@ def channels_login(login_id: str) -> None:
         account = db.scalar(
             select(Account).where(
                 Account.tenant_id == tenant_id,
-                Account.platform == Platform.channels,
-                Account.external_id == profile["uniq_id"],
+                Account.platform == platform,
+                Account.external_id == profile["external_id"],
             )
         )
         if account is None:
             account = Account(
                 tenant_id=tenant_id,
-                platform=Platform.channels,
-                external_id=profile["uniq_id"],
-                display_name=profile.get("nickname") or profile["uniq_id"],
+                platform=platform,
+                external_id=profile["external_id"],
+                display_name=profile.get("nickname") or profile["external_id"],
             )
             db.add(account)
         account.avatar_url = profile.get("avatar_url") or account.avatar_url
@@ -96,14 +110,11 @@ def check_account(account_id: int) -> str:
         account = db.get(Account, account_id)
         if account is None or account.platform not in BROWSER_PLATFORMS or not account.credentials_encrypted:
             return "skipped"
-        if account.platform != Platform.channels:
-            return "skipped"  # 抖音接入后补上
 
-        from app.platforms import channels
-
+        module = _browser_module(account.platform)
         state = decrypt_credentials(account.credentials_encrypted)["storage_state"]
         try:
-            new_state = channels.check(state)
+            new_state = module.check(state)
         except LoginExpired:
             account.status = AccountStatus.expired
         except Exception:
@@ -177,20 +188,20 @@ def run_publish_task(task_id: int) -> None:
                 raise PublishError("账号已被移除")
             if account.status != AccountStatus.active or not account.credentials_encrypted:
                 raise PublishError("账号登录已失效，请重新扫码登录")
-            if task.platform != Platform.channels:
+            if task.platform not in PUBLISHABLE:
                 raise PublishError("该平台暂不支持发布")
 
-            from app.platforms import channels
-
+            module = _browser_module(task.platform)
             post = task.post
             state = decrypt_credentials(account.credentials_encrypted)["storage_state"]
-            new_state = channels.publish(
+            new_state = module.publish(
                 state,
                 Path(get_settings().media_dir) / post.video_path,
                 title=post.title,
                 description=post.description,
                 tags=post.tags,
                 schedule_at=post.scheduled_at,
+                ask_code=verification.asker(f"task:{task_id}"),
             )
             account.credentials_encrypted = encrypt_credentials({"storage_state": new_state})
             task.status = PublishStatus.success

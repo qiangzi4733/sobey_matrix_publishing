@@ -18,7 +18,7 @@
 |---|---|---|
 | 视频号 | 扫码登录 + Playwright（patchright + Google Chrome） | **已完成**：扫码登录、登录检测、发布、平台原生定时发表。定时发表已用真实账号验证；立即发布由用户自行测试 |
 | 微信公众号 | 微信开放平台**第三方平台**（平台型）授权，用户的资质已申请下来 | 未开始 |
-| 抖音 | 扫码登录 + 浏览器自动化，参考 social-auto-upload 的 `uploader/douyin_uploader` | 未开始 |
+| 抖音 | 扫码登录 + 浏览器自动化（参考 social-auto-upload 的 `uploader/douyin_uploader`） | **已完成**：扫码登录（含短信身份验证）、登录检测、发布、平台原生定时发布。登录和检测已用真实账号验证，发布已演练到「点发布」之前；**真实发布尚未验证** |
 | 快手 | 快手开放平台 OAuth，scope `user_video_publish`，三步上传发布 | **等待权限审批，暂不做** |
 
 ## 架构
@@ -27,7 +27,7 @@
 frontend (Vue3 + Element Plus, Vite)
    │ /api 代理
 backend (FastAPI)  ── PostgreSQL（业务数据）
-   │                └ Redis（Celery broker + 扫码登录会话）
+   │                └ Redis（Celery broker + 扫码登录会话 + 短信验证码中转）
    ├─ worker          Celery 默认队列 `celery`：定时分发、批量检测（以后公众号 API 发布也放这里）
    ├─ browser-worker  Celery `browser` 队列：扫码登录、登录检测、视频号/抖音发布（amd64 + Chrome）
    └─ beat            每分钟分发到点的定时任务；每 6 小时检测扫码类账号
@@ -37,8 +37,9 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 - `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容）/ `PublishTask`（每个账号一条）。
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
-- `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`scheduling.py` 定义哪些平台用**平台原生定时**；`channels.py` 是视频号实现。
+- `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
+- `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
 - `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`posts`（上传视频创建发布、任务列表、重试、失败截图）。
 - `frontend/src/platforms.js`：前端的平台名称和能力列表，接入新平台时同步修改。
 
@@ -48,11 +49,13 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - **凭证**：平台 token / cookie 一律用 `app.security.encrypt_credentials` 加密后存库，不落明文文件。扫码类平台存 `{"storage_state": ...}`。`CREDENTIALS_KEY` 丢失后所有账号需重新授权。
 - **浏览器依赖隔离**：`patchright` 只装在 browser-worker 镜像里。平台模块（如 `channels.py`）只能在任务函数**内部**导入；backend 需要用到的规则（如定时范围）放到不依赖浏览器的模块（如 `scheduling.py`）。
 - **发布不可重复**：`run_publish_task` 用 `acks_late=False`，并用 `UPDATE ... WHERE status='queued'` 抢占任务。宁可漏发不可重发。
-- **定时发布两种模式**：`scheduling.NATIVE_SCHEDULE` 里的平台在提交时就把定时时间交给平台（视频号：10 分钟后～30 天内，北京时间）；其他平台建任务时状态为 `scheduled`，由 beat 到点改为 `queued`。不要用 Celery 的 `eta` 做长延时（Redis visibility timeout 会导致重复投递）。
-- **平台模块的写法**（参考 `channels.py`）：
+- **定时发布两种模式**：`scheduling.NATIVE_SCHEDULE` 里的平台在提交时就把定时时间交给平台（视频号：10 分钟后～30 天内；抖音：2 小时后～14 天内；都按北京时间）；其他平台建任务时状态为 `scheduled`，由 beat 到点改为 `queued`。不要用 Celery 的 `eta` 做长延时（Redis visibility timeout 会导致重复投递）。
+- **平台模块的写法**（参考 `channels.py` / `douyin.py`，接口保持一致，任务层不区分平台）：
+  - `login(on_qr, on_status, ask_code) -> (storage_state, {"external_id", "nickname", "avatar_url"})`；`check(state) -> state`；`publish(state, video, title, description, tags, schedule_at, ask_code) -> state`；
   - 用同步 API（`patchright.sync_api`），登录态作为 dict 传入/传出；
+  - 平台要求短信验证码时调用 `ask_code(提示, 弹窗截图)`，返回客户输入的验证码；
   - 发布、检测成功后返回刷新后的 `storage_state`，由任务写回数据库；
-  - 登录失效抛 `LoginExpired`，可预期的失败抛 `PublishError` 并附 `_screenshot(...)` 现场截图；
+  - 登录失效抛 `LoginExpired`，可预期的失败抛 `PublishError` 并附 `screenshot(...)` 现场截图；
   - 页面选择器写明实测日期，平台改版时最先坏的就是这里。
 - 数据库表目前由 `Base.metadata.create_all` 在启动时创建，**不会修改已有表**。改已有表的字段前，先引入 Alembic（这是待办），不要手改生产库。
 - 代码风格：中文注释，只写「为什么」；跟随周围代码的命名和写法；不加无用的抽象。
@@ -65,7 +68,19 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - 不能直接打开 `/platform/post/create`（表单不挂载），要先进 `/platform` 首页再点「发表视频」。
 - 定时发表日历会停在上次查看的月份，需要能前后翻；超过 30 天的日期是 disabled。
 - 微信头像有防盗链，前端 `<img>` 要加 `referrerpolicy="no-referrer"`。
+- **视频号助手疑似同一账号只允许一个网页登录**：2026-11-02 用户自己登录视频号助手后，平台保存的登录态随即失效（待用户确认）。若属实，客户自己登录视频号助手就会把平台挤掉，需要重新扫码。
 - 视频号流程移植自 social-auto-upload（MIT），见 `THIRD_PARTY_NOTICES.md`。上游源码可 `git clone --depth 1 https://github.com/dreammis/social-auto-upload` 到临时目录**只读参考**，不要整体引入为依赖（它在重构，且依赖全局配置和 cookie 文件）。
+
+### 已踩过的坑（抖音，2026-11 实测）
+
+- 登录页二维码是 `#animate_qrcode_container` 里的 `data:image` 图片，会自己定时刷新；**扫码后同一位置会换成扫码人的头像卡片**（也是图片），不能拿「二维码图片是否可见」判断扫码状态。前端展示的是整块扫码栏 `#douyin_login_comp_scan_code`，客户能看到「需在手机上进行确认」等状态。
+- 扫码并在手机确认后，新设备会弹「身份验证」面板（class 含 `second_verify_panel` / `uc_verification_component_layout`）：先选验证方式（选含「短信」的那项），面板随即整体换成「接收短信验证码」页（自动发送）。**操作一律限定在面板内、每步重新定位**——背后的手机号登录表单也有验证码输入框和「获取验证码」，被盖住点不动。
+- 「验证」按钮不在面板元素内部，按整页找文字恰好为「验证」的元素（登录表单的按钮是「登录」，不会误中）。
+- 验证通过一次后，同一浏览器环境再扫码可能不再要求短信验证。
+- 账号信息用登录后的 `GET /web/api/media/user/info/` 读取，以 `user.uid` 作为 `external_id`（抖音号客户可以改，不能用来去重）。
+- 发布页：上传后跳到 `/creator-micro/content/post/video`；标题 `input[placeholder*="填写作品标题"]`（最多 30 字），描述是 `div.zone-container[contenteditable]`；定时发布在 `.semi-input[placeholder="日期和时间"]` 输入 `YYYY-MM-DD HH:MM` 后回车，**超出范围抖音会把值改回默认（当前 + 2 小时）**，必须回读核对。
+- 没有移植上游的两个默认行为：自动勾选「内容由AI生成」声明、打开同步到其他平台开关（都是上游自己的业务需要）。
+- 扫码登录调试经验：不要猜页面结构，先让程序在状态变化时记录整页截图 + 面板 HTML，再写选择器。
 
 ## 开发环境（非常重要）
 
@@ -114,7 +129,7 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 开发库里的测试数据：
 
 - 测试登录账号见 `README.md`（公司「演示公司」）。
-- 该租户下有一个**用户本人的真实视频号账号**（IamAdy，`accounts.id = 5`），登录态有效。
+- 该租户下有**用户本人的真实账号**：视频号 IamAdy（`accounts.id = 5`，2026-11-02 登录态已失效，需重新扫码）、抖音 IamAdy（`accounts.id = 6`，登录态有效）。
 - 测试视频在 media 卷的 `/data/test/sample.mp4`（12 秒竖屏彩条）。
 
 ## 安全红线
@@ -131,6 +146,6 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 ## 待办 / 下一步
 
 1. **微信公众号（第三方平台）**：接收 `component_verify_ticket`（授权事件接收 URL，需要公网 HTTPS + 已备案域名，本地开发需要部署或内网穿透）、`component_access_token`、预授权码与授权回调、`authorizer_refresh_token` 刷新；发表流程：上传正文图片（`uploadimg`）和封面（永久素材）→ `draft/add` → `freepublish/submit` → 结果通过事件推送或 `freepublish/get` 确认。客户的公众号必须是**已认证的企业主体**才能调用发表接口。需要新的「图文」内容类型，`Post` 目前只有视频字段。
-2. **抖音**：参照 `channels.py` 的模式实现扫码登录、检测、发布；把 `Platform.douyin` 加入 `accounts.LOGIN_TASKS`、`tasks.PUBLISHABLE`、`check_account`，以及前端 `platforms.js`。
+2. **抖音真实发布验证**：发布流程已演练到「点发布」之前，点发布之后的跳转判断（等待进入 `/content/manage`）和发布中的短信验证尚未用真实账号跑过，需征得用户同意后用定时发布测试。
 3. **快手**：等权限批下来后接 OAuth 和三步上传。
 4. 基础设施：引入 Alembic；任务卡在 `running`（worker 崩溃）时的超时回收；视频号「实名验证」弹窗目前直接报错，以后可以把验证二维码推给客户；生产部署用的 compose（不挂源码、Nginx + HTTPS、在 amd64 服务器上构建镜像）。

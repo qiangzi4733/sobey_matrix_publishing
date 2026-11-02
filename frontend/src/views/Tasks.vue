@@ -26,13 +26,23 @@
       <el-table-column label="失败原因" show-overflow-tooltip>
         <template #default="{ row }">{{ row.error || '' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="140">
+      <el-table-column label="操作" width="160">
         <template #default="{ row }">
+          <el-button v-if="row.needs_code" link type="warning" @click="openVerify(row)">输入验证码</el-button>
           <el-button v-if="row.has_screenshot" link type="primary" @click="showScreenshot(row)">截图</el-button>
           <el-button v-if="row.status === 'failed'" link type="primary" @click="retry(row)">重试</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="verifyVisible" title="平台要求短信验证" width="420px">
+      <p class="tip">{{ verify.message }}</p>
+      <img v-if="verify.image" :src="verify.image" class="screenshot" alt="验证弹窗" />
+      <div class="code">
+        <el-input v-model="code" placeholder="短信验证码" maxlength="8" @keyup.enter="submitCode" />
+        <el-button type="primary" :loading="submitting" @click="submitCode">提交</el-button>
+      </div>
+    </el-dialog>
 
     <el-dialog v-model="screenshotVisible" title="失败现场截图" width="80%" @closed="clearScreenshot">
       <img :src="screenshotUrl" class="screenshot" alt="失败截图" />
@@ -57,6 +67,10 @@ const STATUS = {
 const tasks = ref([])
 const screenshotVisible = ref(false)
 const screenshotUrl = ref('')
+const verifyVisible = ref(false)
+const verify = ref({ message: '', image: null, taskId: null })
+const code = ref('')
+const submitting = ref(false)
 let timer = null
 
 async function load() {
@@ -70,6 +84,25 @@ async function load() {
 async function retry(row) {
   await api.post(`/publish-tasks/${row.id}/retry`)
   await load()
+}
+
+async function openVerify(row) {
+  const { data } = await api.get(`/publish-tasks/${row.id}/verification`)
+  verify.value = { ...data, taskId: row.id }
+  code.value = ''
+  verifyVisible.value = true
+}
+
+async function submitCode() {
+  if (!code.value.trim()) return
+  submitting.value = true
+  try {
+    await api.post(`/publish-tasks/${verify.value.taskId}/code`, { code: code.value.trim() })
+    verifyVisible.value = false
+    await load()
+  } finally {
+    submitting.value = false
+  }
 }
 
 async function showScreenshot(row) {
@@ -101,5 +134,10 @@ onBeforeUnmount(() => clearTimeout(timer))
 }
 .screenshot {
   width: 100%;
+}
+.code {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 </style>

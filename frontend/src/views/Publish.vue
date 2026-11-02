@@ -28,7 +28,7 @@
       <el-form-item label="定时发布">
         <div>
           <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
-          <div class="tip">视频号：需在 10 分钟后、30 天内，提交后由视频号到点自动发布</div>
+          <div class="tip">视频号需在 10 分钟后、30 天内；抖音需在 2 小时后、14 天内。提交后由平台到点自动发布</div>
         </div>
       </el-form-item>
       <el-form-item>

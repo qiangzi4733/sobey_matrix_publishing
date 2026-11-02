@@ -9,6 +9,8 @@ from app.models import Platform
 NATIVE_SCHEDULE: dict[Platform, tuple[timedelta, timedelta]] = {
     # 2026-11 实测视频号可选今天起 30 天内
     Platform.channels: (timedelta(minutes=10), timedelta(days=30)),
+    # 抖音：2 小时后～14 天内（2026-11 发布页提示「支持2小时后及14天内的定时发布」）
+    Platform.douyin: (timedelta(hours=2), timedelta(days=14)),
 }
 
 

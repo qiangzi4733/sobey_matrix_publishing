@@ -54,8 +54,17 @@ class LoginStartOut(BaseModel):
     login_id: str
 
 
+class CodeIn(BaseModel):
+    code: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
+
+
+class VerificationOut(BaseModel):
+    message: str
+    image: str | None
+
+
 class LoginStatusOut(BaseModel):
-    # starting / waiting / scanned / verifying / success / failed
+    # starting / waiting / scanned / need_code / verifying / success / failed
     status: str
     message: str
     qr: str | None = None
@@ -72,6 +81,8 @@ class PublishTaskOut(BaseModel):
     status: PublishStatus
     error: str | None
     has_screenshot: bool
+    # 发布中平台要求短信验证码，等客户输入
+    needs_code: bool = False
     scheduled_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
