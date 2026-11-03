@@ -91,7 +91,7 @@ class Account(Timestamped, Base):
 
 
 class Post(Timestamped, Base):
-    """一次发布的内容，可以同时发到多个账号（每个账号一条 PublishTask）。"""
+    """一次发布的内容，只发到一个账号（发布时生成一条 PublishTask）。"""
 
     __tablename__ = "posts"
 
@@ -108,13 +108,14 @@ class Post(Timestamped, Base):
     review_status: Mapped[ReviewStatus] = mapped_column(
         Enum(ReviewStatus, native_enum=False, length=20), index=True, server_default=ReviewStatus.published.value
     )
-    # 提交时选的账号，点发布时才生成 PublishTask
-    account_ids: Mapped[list[int]] = mapped_column(JSON, server_default="[]")
+    # 一条内容只发一个账号，点发布时才生成 PublishTask；账号被移除后为空，要修改时重新选
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     tasks: Mapped[list["PublishTask"]] = relationship(back_populates="post")
+    account: Mapped["Account | None"] = relationship()
     # 正文跟着内容一起删（删除未发布的内容时）
     article: Mapped["Article | None"] = relationship(cascade="all, delete-orphan")
     creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])

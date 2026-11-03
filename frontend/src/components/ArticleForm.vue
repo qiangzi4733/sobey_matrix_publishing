@@ -46,12 +46,12 @@
         </el-radio-group>
       </el-form-item>
       <el-form-item label="公众号" required>
-        <el-checkbox-group v-model="form.accountIds">
-          <el-checkbox v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
+        <el-radio-group v-model="form.accountId">
+          <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
             {{ a.display_name }}
             <span v-if="a.status !== 'active'" class="tip">（需重新授权）</span>
-          </el-checkbox>
-        </el-checkbox-group>
+          </el-radio>
+        </el-radio-group>
         <div v-if="!accounts.length" class="tip">还没有公众号，请先到「账号管理」授权</div>
       </el-form-item>
       <el-form-item label="定时">
@@ -94,7 +94,7 @@ const form = reactive({
   sourceUrl: '',
   openComment: false,
   draftOnly: true,
-  accountIds: [],
+  accountId: null,
   scheduledAt: null,
 })
 let saved = ''
@@ -145,7 +145,7 @@ async function submit() {
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
   if (!form.coverUrl) return ElMessage.warning('请上传封面')
   if (!editor.value.innerText.trim() && !content.includes('<img')) return ElMessage.warning('请填写正文')
-  if (!form.accountIds.length) return ElMessage.warning('请选择公众号')
+  if (!form.accountId) return ElMessage.warning('请选择公众号')
   if (!form.draftOnly) {
     await ElMessageBox.confirm('审核通过并发布后文章对外可见，确定选择直接发表？', '直接发表', { type: 'warning' })
   }
@@ -161,7 +161,7 @@ async function submit() {
       source_url: form.sourceUrl,
       open_comment: form.openComment,
       draft_only: form.draftOnly,
-      account_ids: form.accountIds,
+      account_id: form.accountId,
       scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
     }
     if (postId) await api.put(`/articles/${postId}`, body)
@@ -186,7 +186,7 @@ onMounted(async () => {
       sourceUrl: post.source_url,
       openComment: post.open_comment,
       draftOnly: post.draft_only,
-      accountIds: post.accounts.map((a) => a.id),
+      accountId: post.account?.id ?? null,
       scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
     })
     editor.value.innerHTML = cleanHtml(post.content)

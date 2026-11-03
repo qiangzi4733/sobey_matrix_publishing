@@ -26,12 +26,10 @@ def list_accounts(db: DbSession, user: CurrentUser, platform: Platform | None = 
     return list(db.scalars(query))
 
 
-def _unpublished_posts(db: DbSession, account: Account) -> list[Post]:
-    # account_ids 是 JSON 列，不方便在库里按包含查询；单个租户的未发布内容不多，取出来过滤
-    posts = db.scalars(
-        select(Post).where(Post.tenant_id == account.tenant_id, Post.review_status != ReviewStatus.published)
+def _count_unpublished_posts(db: DbSession, account: Account) -> int:
+    return db.scalar(
+        select(func.count()).where(Post.account_id == account.id, Post.review_status != ReviewStatus.published)
     )
-    return [p for p in posts if account.id in p.account_ids]
 
 
 def _count_tasks(db: DbSession, account: Account, statuses: list[PublishStatus]) -> int:
@@ -44,7 +42,7 @@ def _count_tasks(db: DbSession, account: Account, statuses: list[PublishStatus])
 def account_usage(account_id: int, db: DbSession, user: CurrentUser) -> AccountUsageOut:
     account = _get_owned(db, user, account_id)
     return AccountUsageOut(
-        posts=len(_unpublished_posts(db, account)),
+        posts=_count_unpublished_posts(db, account),
         pending_tasks=_count_tasks(db, account, [PublishStatus.scheduled, PublishStatus.queued]),
         running_tasks=_count_tasks(db, account, [PublishStatus.running]),
     )
@@ -65,9 +63,7 @@ def delete_account(account_id: int, db: DbSession, user: CurrentUser) -> None:
     if _count_tasks(db, account, [PublishStatus.running]):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "该账号有正在发布的任务，请等发布结束后再移除")
-    # 未发布的内容里去掉这个账号，否则点「发布」时会因为账号不存在整条报错
-    for post in _unpublished_posts(db, account):
-        post.account_ids = [i for i in post.account_ids if i != account.id]
+    # 未发布内容的 account_id 由外键置空，修改时重新选账号
     db.delete(account)
     db.commit()
 

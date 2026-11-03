@@ -178,7 +178,7 @@ async function remove(row) {
     return
   }
   const effects = []
-  if (usage.posts) effects.push(`${usage.posts} 条还没发布的内容选了这个账号，移除后会从中去掉它`)
+  if (usage.posts) effects.push(`${usage.posts} 条还没发布的内容要发到这个账号，移除后需要修改内容、重新选择账号`)
   if (usage.pending_tasks) effects.push(`${usage.pending_tasks} 个排队或等待定时的发布任务会取消`)
   // 名称来自平台昵称，用 VNode 而不是 HTML 字符串拼
   const message = h('div', [

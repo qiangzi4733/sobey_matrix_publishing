@@ -49,7 +49,7 @@ class AccountOut(BaseModel):
 class AccountUsageOut(BaseModel):
     """移除账号前给客户看的影响范围。"""
 
-    posts: int  # 选了这个账号、还没点发布的内容
+    posts: int  # 发到这个账号、还没点发布的内容
     pending_tasks: int  # 排队中、等定时的发布任务，移除后会标为失败
     running_tasks: int  # 正在发布，有的话不能移除
 
@@ -114,8 +114,8 @@ class PostOut(BaseModel):
     reviewer_name: str | None
     reviewed_at: datetime | None
     creator_name: str | None
-    # 已被移除的账号不在这里
-    accounts: list[PostAccountOut]
+    # 账号被移除后为空
+    account: PostAccountOut | None
     scheduled_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -156,7 +156,7 @@ class ArticleIn(BaseModel):
     source_url: str = Field(default="", max_length=500, pattern=r"^(https?://.*)?$")
     open_comment: bool = False
     draft_only: bool = True
-    account_ids: list[int] = Field(min_length=1)
+    account_id: int
     scheduled_at: datetime | None = None
 
 

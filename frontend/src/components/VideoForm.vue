@@ -19,12 +19,12 @@
         <el-select v-model="form.tags" multiple filterable allow-create default-first-option placeholder="输入后回车，不用加 #" style="width: 100%" />
       </el-form-item>
       <el-form-item label="发布账号" required>
-        <el-checkbox-group v-model="form.accountIds">
-          <el-checkbox v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
+        <el-radio-group v-model="form.accountId">
+          <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
             {{ PLATFORMS[a.platform] }} · {{ a.display_name }}
             <span v-if="a.status !== 'active'" class="tip">（需重新登录）</span>
-          </el-checkbox>
-        </el-checkbox-group>
+          </el-radio>
+        </el-radio-group>
         <div v-if="!accounts.length" class="tip">还没有可发布的账号，请先到「账号管理」添加</div>
       </el-form-item>
       <el-form-item label="定时发布">
@@ -61,7 +61,7 @@ const accounts = ref([])
 const file = ref(null)
 const submitting = ref(false)
 const progress = ref(0)
-const form = reactive({ title: '', description: '', tags: [], accountIds: [], scheduledAt: null })
+const form = reactive({ title: '', description: '', tags: [], accountId: null, scheduledAt: null })
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 let saved = ''
 
@@ -80,14 +80,14 @@ function pickFile(uploadFile) {
 async function submit() {
   if (!file.value && !postId) return ElMessage.warning('请选择视频')
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
-  if (!form.accountIds.length) return ElMessage.warning('请选择发布账号')
+  if (!form.accountId) return ElMessage.warning('请选择发布账号')
 
   const body = new FormData()
   if (file.value) body.append('video', file.value)
   body.append('title', form.title)
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
-  body.append('account_ids', form.accountIds.join(','))
+  body.append('account_id', form.accountId)
   if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
   submitting.value = true
@@ -116,7 +116,7 @@ onMounted(async () => {
       title: post.title,
       description: post.description,
       tags: post.tags,
-      accountIds: post.accounts.map((a) => a.id),
+      accountId: post.account?.id ?? null,
       scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
     })
     videoUrl.value = post.video_url

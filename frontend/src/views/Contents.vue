@@ -23,7 +23,8 @@
       </el-table-column>
       <el-table-column label="发布账号" min-width="160">
         <template #default="{ row }">
-          <div v-for="a in row.accounts" :key="a.id">{{ PLATFORMS[a.platform] }} · {{ a.display_name }}</div>
+          <template v-if="row.account">{{ PLATFORMS[row.account.platform] }} · {{ row.account.display_name }}</template>
+          <span v-else-if="row.review_status !== 'published'" class="warn">账号已移除，请修改</span>
         </template>
       </el-table-column>
       <el-table-column label="定时" width="170">
@@ -65,10 +66,11 @@
           <el-descriptions-item label="状态">{{ REVIEW_STATUS[detail.review_status].label }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.review_note" label="审核意见">{{ detail.review_note }}</el-descriptions-item>
           <el-descriptions-item label="发布账号">
-            <div v-for="a in detail.accounts" :key="a.id">
-              {{ PLATFORMS[a.platform] }} · {{ a.display_name }}
-              <span v-if="a.status !== 'active'" class="warn">（登录已失效）</span>
-            </div>
+            <template v-if="detail.account">
+              {{ PLATFORMS[detail.account.platform] }} · {{ detail.account.display_name }}
+              <span v-if="detail.account.status !== 'active'" class="warn">（登录已失效）</span>
+            </template>
+            <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="定时">{{ detail.scheduled_at ? formatTime(detail.scheduled_at) : '立即' }}</el-descriptions-item>
           <template v-if="detail.kind === 'video'">
@@ -129,7 +131,7 @@
     <el-dialog v-model="publishVisible" title="发布" width="480px">
       <template v-if="publishing">
         <p>《{{ publishing.title }}》将发布到：</p>
-        <div v-for="a in publishing.accounts" :key="a.id">{{ PLATFORMS[a.platform] }} · {{ a.display_name }}</div>
+        <div>{{ PLATFORMS[publishing.account.platform] }} · {{ publishing.account.display_name }}</div>
         <el-form label-width="70px" class="publish-form">
           <el-form-item label="时间">
             <el-radio-group v-model="publishMode">
@@ -229,6 +231,7 @@ async function reject() {
 }
 
 function openPublish(row) {
+  if (!row.account) return ElMessage.warning('发布账号已被移除，请先修改内容、重新选择账号')
   publishing.value = row
   const at = row.scheduled_at ? new Date(row.scheduled_at) : null
   scheduleExpired.value = Boolean(at && at <= new Date())
