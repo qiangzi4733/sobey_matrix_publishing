@@ -4,17 +4,16 @@
       <el-radio-group v-model="platform">
         <el-radio-button value="">全部</el-radio-button>
         <el-radio-button v-for="(label, key) in PLATFORMS" :key="key" :value="key">
-          {{ label }}
+          <span class="with-icon"><PlatformIcon :platform="key" />{{ label }}</span>
         </el-radio-button>
       </el-radio-group>
       <el-dropdown @command="addAccount">
         <el-button type="primary">添加账号</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item command="channels">扫码登录视频号</el-dropdown-item>
-            <el-dropdown-item command="wechat_mp">授权微信公众号</el-dropdown-item>
-            <el-dropdown-item command="douyin">扫码登录抖音</el-dropdown-item>
-            <el-dropdown-item command="kuaishou" disabled>授权快手（权限申请中）</el-dropdown-item>
+            <el-dropdown-item v-for="item in ADD_OPTIONS" :key="item.platform" :command="item.platform" :disabled="item.disabled">
+              <span class="with-icon"><PlatformIcon :platform="item.platform" />{{ item.label }}</span>
+            </el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -30,8 +29,10 @@
     />
 
     <el-table :data="shown" v-loading="loading" empty-text="还没有账号，点击右上角添加">
-      <el-table-column label="平台" width="90">
-        <template #default="{ row }">{{ PLATFORMS[row.platform] }}</template>
+      <el-table-column label="平台" width="130">
+        <template #default="{ row }">
+          <span class="with-icon"><PlatformIcon :platform="row.platform" :size="18" />{{ PLATFORMS[row.platform] }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="名称" min-width="160">
         <template #default="{ row }">
@@ -51,7 +52,7 @@
       <el-table-column label="上次检测" width="170">
         <template #default="{ row }">{{ formatTime(row.last_checked_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="190" fixed="right">
+      <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }">
           <template v-if="QR_LOGIN_PLATFORMS.includes(row.platform)">
             <el-button v-if="row.status !== 'active'" link type="warning" @click="relogin(row)">
@@ -69,7 +70,6 @@
           >
             重新授权
           </el-button>
-          <el-button link type="primary" @click="rename(row)">改名</el-button>
           <el-button link type="danger" @click="remove(row)">移除</el-button>
         </template>
       </el-table-column>
@@ -90,6 +90,7 @@ import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import PlatformIcon from '../components/PlatformIcon.vue'
 import QrLoginDialog from '../components/QrLoginDialog.vue'
 import { PLATFORMS, QR_LOGIN_PLATFORMS, formatTime } from '../platforms'
 
@@ -98,6 +99,13 @@ const STATUS = {
   expired: { label: '需重新登录', type: 'warning' },
   error: { label: '异常', type: 'danger' },
 }
+
+const ADD_OPTIONS = [
+  { platform: 'channels', label: '扫码登录视频号' },
+  { platform: 'wechat_mp', label: '授权微信公众号' },
+  { platform: 'douyin', label: '扫码登录抖音' },
+  { platform: 'kuaishou', label: '授权快手（权限申请中）', disabled: true },
+]
 
 const accounts = ref([])
 const platform = ref('')
@@ -161,12 +169,6 @@ async function check(row) {
   }
 }
 
-async function rename(row) {
-  const { value } = await ElMessageBox.prompt('新的名称', '改名', { inputValue: row.display_name })
-  await api.patch(`/accounts/${row.id}`, { display_name: value })
-  await load()
-}
-
 async function remove(row) {
   const { data: usage } = await api.get(`/accounts/${row.id}/usage`)
   if (usage.running_tasks) {
@@ -200,6 +202,11 @@ onMounted(load)
 }
 .invalid-alert {
   margin-bottom: 12px;
+}
+.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .name {
   display: flex;

@@ -98,13 +98,10 @@ def qr_login(login_id: str) -> None:
             )
         )
         if account is None:
-            account = Account(
-                tenant_id=tenant_id,
-                platform=platform,
-                external_id=profile["external_id"],
-                display_name=profile.get("nickname") or profile["external_id"],
-            )
+            account = Account(tenant_id=tenant_id, platform=platform, external_id=profile["external_id"])
             db.add(account)
+        # 名称、头像以平台为准，客户在平台上改了昵称，重新扫码后跟着变
+        account.display_name = profile.get("nickname") or account.display_name or profile["external_id"]
         account.avatar_url = profile.get("avatar_url") or account.avatar_url
         account.credentials_encrypted = encrypt_credentials({"storage_state": state})
         account.status = AccountStatus.active

@@ -59,13 +59,10 @@ def finish_authorize(body: WechatCallbackIn, db: DbSession, user: CurrentUser) -
         )
     )
     if account is None:
-        account = Account(
-            tenant_id=user.tenant_id,
-            platform=Platform.wechat_mp,
-            external_id=profile["external_id"],
-            display_name=profile["nickname"],
-        )
+        account = Account(tenant_id=user.tenant_id, platform=Platform.wechat_mp, external_id=profile["external_id"])
         db.add(account)
+    # 名称、头像以平台为准，重新授权时同步
+    account.display_name = profile["nickname"] or account.display_name or profile["external_id"]
     account.avatar_url = profile["avatar_url"] or account.avatar_url
     account.credentials_encrypted = encrypt_credentials(credentials)
     account.status = AccountStatus.active

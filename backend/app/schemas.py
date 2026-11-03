@@ -46,10 +46,6 @@ class AccountOut(BaseModel):
     created_at: datetime
 
 
-class AccountUpdate(BaseModel):
-    display_name: str = Field(min_length=1, max_length=100)
-
-
 class AccountUsageOut(BaseModel):
     """移除账号前给客户看的影响范围。"""
 

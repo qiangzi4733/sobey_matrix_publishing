@@ -5,7 +5,7 @@ from sqlalchemy import func, select, update
 from app import login_sessions, tasks, verification
 from app.deps import CurrentUser, DbSession
 from app.models import Account, Platform, Post, PublishStatus, PublishTask, ReviewStatus
-from app.schemas import AccountOut, AccountUpdate, AccountUsageOut, CodeIn, LoginStartOut, LoginStatusOut
+from app.schemas import AccountOut, AccountUsageOut, CodeIn, LoginStartOut, LoginStatusOut
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -24,14 +24,6 @@ def list_accounts(db: DbSession, user: CurrentUser, platform: Platform | None = 
     if platform:
         query = query.where(Account.platform == platform)
     return list(db.scalars(query))
-
-
-@router.patch("/{account_id}", response_model=AccountOut)
-def update_account(account_id: int, body: AccountUpdate, db: DbSession, user: CurrentUser) -> Account:
-    account = _get_owned(db, user, account_id)
-    account.display_name = body.display_name
-    db.commit()
-    return account
 
 
 def _unpublished_posts(db: DbSession, account: Account) -> list[Post]:

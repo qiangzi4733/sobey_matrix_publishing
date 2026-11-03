@@ -19,4 +19,19 @@ export const REVIEW_STATUS = {
   published: { label: '已发布', type: 'success' },
 }
 
-export const formatTime = (value) => (value ? new Date(value).toLocaleString() : '-')
+// 客户都在国内，时间一律按北京时间显示，不随浏览器时区变化；格式如 2026-11-02 18:28
+const BEIJING = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+export const formatTime = (value) => {
+  if (!value) return '-'
+  const part = Object.fromEntries(BEIJING.formatToParts(new Date(value)).map((p) => [p.type, p.value]))
+  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`
+}
