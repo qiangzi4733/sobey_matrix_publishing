@@ -76,10 +76,11 @@ import api from '../api'
 import { cleanHtml } from '../html'
 import { ARTICLE_PLATFORMS } from '../platforms'
 
-// 不传 postId 是新建，传了是修改
-const props = defineProps({ postId: { type: Number, default: null } })
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选。
+// 正文图片和封面不会随内容删除，复制的内容直接引用同一批图片
+const props = defineProps({ postId: { type: Number, default: null }, copyFrom: { type: Number, default: null } })
 const emit = defineEmits(['saved', 'cancel'])
-const postId = props.postId
+const { postId, copyFrom } = props
 const reviewNote = ref('')
 const accounts = ref([])
 const editor = ref(null)
@@ -176,8 +177,8 @@ async function submit() {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => ARTICLE_PLATFORMS.includes(a.platform))
-  if (postId) {
-    const post = (await api.get(`/posts/${postId}`)).data
+  if (postId || copyFrom) {
+    const post = (await api.get(`/posts/${postId || copyFrom}`)).data
     Object.assign(form, {
       title: post.title,
       author: post.author,
@@ -186,11 +187,13 @@ onMounted(async () => {
       sourceUrl: post.source_url,
       openComment: post.open_comment,
       draftOnly: post.draft_only,
-      accountId: post.account?.id ?? null,
-      scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
     })
     editor.value.innerHTML = cleanHtml(post.content)
-    reviewNote.value = post.review_note || ''
+    if (postId) {
+      form.accountId = post.account?.id ?? null
+      form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
+      reviewNote.value = post.review_note || ''
+    }
   }
   saved = snapshot()
 })

@@ -44,7 +44,7 @@
       <el-table-column label="审核意见" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">{{ row.review_note || '' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="200">
+      <el-table-column label="操作" width="230">
         <template #default="{ row }">
           <template v-if="row.review_status === 'pending'">
             <el-button link type="success" @click="approve(row)">通过</el-button>
@@ -56,6 +56,7 @@
             <el-button link type="danger" @click="remove(row)">删除</el-button>
           </template>
           <el-button v-else link type="primary" @click="$router.push({ name: 'tasks' })">发布记录</el-button>
+          <el-button link type="primary" @click="copy(row)">复制</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -93,8 +94,9 @@
           <el-button type="success" @click="approve(detail)">审核通过</el-button>
           <el-button type="warning" @click="openReject(detail)">退回</el-button>
         </div>
-        <div v-if="detail.review_status === 'approved'" class="actions">
-          <el-button type="primary" @click="openPublish(detail)">发布</el-button>
+        <div class="actions">
+          <el-button v-if="detail.review_status === 'approved'" type="primary" @click="openPublish(detail)">发布</el-button>
+          <el-button @click="copy(detail)">复制到其他账号</el-button>
         </div>
       </template>
     </el-drawer>
@@ -102,22 +104,22 @@
     <!-- 新建、修改：视频字段少用弹窗；图文有正文编辑器，用宽抽屉 -->
     <el-dialog
       v-model="videoFormVisible"
-      :title="editingId ? '修改视频' : '发布视频'"
+      :title="editingId ? '修改视频' : copyingId ? '复制视频' : '发布视频'"
       width="720px"
       top="5vh"
       :before-close="beforeFormClose"
-      @closed="editingId = null"
+      @closed="resetForm"
     >
-      <VideoForm v-if="videoFormVisible" ref="formRef" :post-id="editingId" @saved="formSaved" @cancel="closeForm" />
+      <VideoForm v-if="videoFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" @saved="formSaved" @cancel="closeForm" />
     </el-dialog>
     <el-drawer
       v-model="articleFormVisible"
-      :title="editingId ? '修改图文（微信公众号）' : '发布图文（微信公众号）'"
+      :title="`${editingId ? '修改' : copyingId ? '复制' : '发布'}图文（微信公众号）`"
       size="min(960px, 92%)"
       :before-close="beforeFormClose"
-      @closed="editingId = null"
+      @closed="resetForm"
     >
-      <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" @saved="formSaved" @cancel="closeForm" />
+      <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" @saved="formSaved" @cancel="closeForm" />
     </el-drawer>
 
     <el-dialog v-model="rejectVisible" title="退回" width="460px">
@@ -185,6 +187,7 @@ const busy = ref(false)
 const videoFormVisible = ref(false)
 const articleFormVisible = ref(false)
 const editingId = ref(null)
+const copyingId = ref(null)
 const formRef = ref(null)
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 
@@ -258,8 +261,9 @@ async function publish() {
   }
 }
 
-function openForm(kind, postId = null) {
+function openForm(kind, postId = null, copyFrom = null) {
   editingId.value = postId
+  copyingId.value = copyFrom
   if (kind === 'article') articleFormVisible.value = true
   else videoFormVisible.value = true
 }
@@ -267,6 +271,17 @@ function openForm(kind, postId = null) {
 function edit(row) {
   detailVisible.value = false
   openForm(row.kind, row.id)
+}
+
+// 复制内容和视频，换个账号再发；视频只能复制给视频渠道，图文只能给公众号
+function copy(row) {
+  detailVisible.value = false
+  openForm(row.kind, null, row.id)
+}
+
+function resetForm() {
+  editingId.value = null
+  copyingId.value = null
 }
 
 async function beforeFormClose(done) {

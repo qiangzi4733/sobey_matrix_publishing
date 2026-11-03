@@ -2,11 +2,11 @@
   <div>
     <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
     <el-form :model="form" label-width="90px" @submit.prevent="submit">
-      <el-form-item label="视频" :required="!postId">
+      <el-form-item label="视频" required>
         <video v-if="videoUrl && !file" :src="videoUrl" controls class="video" />
         <el-upload :auto-upload="false" :limit="1" accept=".mp4,.mov" :on-change="pickFile" :on-remove="() => (file = null)">
-          <el-button>{{ postId ? '更换视频' : '选择视频文件' }}</el-button>
-          <template #tip><div class="tip">支持 mp4 / mov{{ postId ? '，不选则沿用原视频' : '' }}</div></template>
+          <el-button>{{ videoUrl ? '更换视频' : '选择视频文件' }}</el-button>
+          <template #tip><div class="tip">支持 mp4 / mov{{ videoUrl ? '，不选则沿用原视频' : '' }}</div></template>
         </el-upload>
       </el-form-item>
       <el-form-item label="标题" required>
@@ -51,10 +51,10 @@ import { ElMessage } from 'element-plus'
 import api from '../api'
 import { PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
 
-// 不传 postId 是新建，传了是修改
-const props = defineProps({ postId: { type: Number, default: null } })
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选
+const props = defineProps({ postId: { type: Number, default: null }, copyFrom: { type: Number, default: null } })
 const emit = defineEmits(['saved', 'cancel'])
-const postId = props.postId
+const { postId, copyFrom } = props
 const reviewNote = ref('')
 const videoUrl = ref('')
 const accounts = ref([])
@@ -78,12 +78,13 @@ function pickFile(uploadFile) {
 }
 
 async function submit() {
-  if (!file.value && !postId) return ElMessage.warning('请选择视频')
+  if (!file.value && !videoUrl.value) return ElMessage.warning('请选择视频')
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
   if (!form.accountId) return ElMessage.warning('请选择发布账号')
 
   const body = new FormData()
   if (file.value) body.append('video', file.value)
+  else if (copyFrom) body.append('copy_from', copyFrom)
   body.append('title', form.title)
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
@@ -110,17 +111,15 @@ async function submit() {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
-  if (postId) {
-    const post = (await api.get(`/posts/${postId}`)).data
-    Object.assign(form, {
-      title: post.title,
-      description: post.description,
-      tags: post.tags,
-      accountId: post.account?.id ?? null,
-      scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
-    })
+  if (postId || copyFrom) {
+    const post = (await api.get(`/posts/${postId || copyFrom}`)).data
+    Object.assign(form, { title: post.title, description: post.description, tags: post.tags })
     videoUrl.value = post.video_url
-    reviewNote.value = post.review_note || ''
+    if (postId) {
+      form.accountId = post.account?.id ?? null
+      form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
+      reviewNote.value = post.review_note || ''
+    }
   }
   saved = snapshot()
 })

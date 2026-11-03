@@ -1,3 +1,4 @@
+import os
 import shutil
 import uuid
 from datetime import UTC, datetime
@@ -177,6 +178,20 @@ def _save_video(user: CurrentUser, video: UploadFile) -> str:
     return str(relative)
 
 
+def _copy_video(db: DbSession, user: CurrentUser, source_id: int) -> str:
+    source = _get_post(db, user, source_id)
+    media_dir = Path(get_settings().media_dir)
+    if source.article is not None or not (media_dir / source.video_path).is_file():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "要复制的视频不存在")
+    relative = Path(str(user.tenant_id)) / f"{uuid.uuid4().hex}{Path(source.video_path).suffix}"
+    # 删除内容时会删掉它的视频文件，所以不能和原内容共用路径；硬链接不占额外空间，不支持时才真的复制
+    try:
+        os.link(media_dir / source.video_path, media_dir / relative)
+    except OSError:
+        shutil.copyfile(media_dir / source.video_path, media_dir / relative)
+    return str(relative)
+
+
 def _remove_video(post: Post) -> None:
     if post.video_path:
         (Path(get_settings().media_dir) / post.video_path).unlink(missing_ok=True)
@@ -186,14 +201,17 @@ def _remove_video(post: Post) -> None:
 def create_post(
     db: DbSession,
     user: CurrentUser,
-    video: Annotated[UploadFile, File()],
     title: Annotated[str, Form(min_length=1, max_length=200)],
     account_id: Annotated[int, Form()],
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
+    video: Annotated[UploadFile | None, File()] = None,
+    copy_from: Annotated[int | None, Form(description="复制这条内容的视频，不用重新上传")] = None,
 ) -> PostOut:
     """上传视频并提交审核；审核通过后手动发布到选中的账号。"""
+    if (video is None) == (copy_from is None):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择视频")
     account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频")
     _check_schedule(scheduled_at, account)
     post = Post(
@@ -202,7 +220,7 @@ def create_post(
         title=title,
         description=description,
         tags=[t.lstrip("#") for t in _split(tags)],
-        video_path=_save_video(user, video),
+        video_path=_save_video(user, video) if video is not None else _copy_video(db, user, copy_from),
         scheduled_at=scheduled_at,
     )
     return _submit_for_review(db, post, account)
