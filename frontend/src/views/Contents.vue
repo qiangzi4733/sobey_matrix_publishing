@@ -106,6 +106,15 @@
           <template v-if="detail.kind === 'video'">
             <el-descriptions-item label="描述"><div class="pre">{{ detail.description || '-' }}</div></el-descriptions-item>
             <el-descriptions-item label="话题">{{ detail.tags.map((t) => `#${t}`).join(' ') || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="封面">
+              <img v-if="detail.cover_url" :src="detail.cover_url" class="video-cover" alt="封面" />
+              <span v-else>平台自动生成</span>
+            </el-descriptions-item>
+            <!-- 平台专属配置 -->
+            <el-descriptions-item v-for="(value, key) in detail.options" :key="key" :label="VIDEO_OPTION_LABELS[key]?.label ?? key">
+              <img v-if="VIDEO_OPTION_LABELS[key]?.image" :src="value" class="video-cover landscape" alt="" />
+              <template v-else>{{ value }}</template>
+            </el-descriptions-item>
           </template>
           <template v-else>
             <el-descriptions-item label="作者">{{ detail.author || '-' }}</el-descriptions-item>
@@ -213,7 +222,7 @@ import CategorySelect from '../components/CategorySelect.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryPath } from '../categories'
 import { cleanHtml } from '../html'
-import { PLATFORMS, REVIEW_STATUS, formatTime } from '../platforms'
+import { PLATFORMS, REVIEW_STATUS, VIDEO_OPTION_LABELS, formatTime } from '../platforms'
 
 const route = useRoute()
 const router = useRouter()
@@ -474,6 +483,16 @@ onMounted(async () => {
   max-height: 480px;
   margin-top: 16px;
   background: #000;
+}
+.video-cover {
+  display: block;
+  width: 90px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.video-cover.landscape {
+  width: 160px;
 }
 .cover {
   width: 270px;

@@ -325,6 +325,28 @@ def _set_short_title(page: Page, title: str) -> None:
         field.fill(_format_short_title(title))
 
 
+def _set_cover(page: Page, cover: Path) -> None:
+    """上传竖封面（3:4「个人主页卡片」）。选择器参照上游 tencent_uploader（2026-10），本项目尚未实测。"""
+    page.locator("div.vertical-cover-wrap").first.click(timeout=10000)
+    dialog = page.locator("div.weui-desktop-dialog:visible").filter(has_text=re.compile("编辑个人主页卡片|编辑封面")).first
+    try:
+        dialog.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise PublishError("封面设置弹窗没有打开", screenshot(page, "channels_cover")) from None
+    dialog.locator('.single-cover-uploader-wrap input[type="file"]').first.set_input_files(str(cover))
+    page.wait_for_timeout(2000)
+    # 图片比例不是 3:4 时会先弹裁剪框
+    crop = page.locator("div.weui-desktop-dialog:visible").filter(has_text="裁剪封面图").first
+    if crop.count():
+        crop.locator('div.weui-desktop-dialog__ft button:has-text("确定")').first.click()
+        page.wait_for_timeout(1000)
+    dialog.locator('div.weui-desktop-dialog__ft button.weui-desktop-btn_primary:has-text("确认")').first.click()
+    try:
+        dialog.wait_for(state="hidden", timeout=15000)
+    except PWTimeout:
+        raise PublishError("封面没有设置成功", screenshot(page, "channels_cover")) from None
+
+
 def _set_schedule(page: Page, when: datetime) -> None:
     """使用视频号自带的「定时发表」，到点由平台发布。"""
     local = when.astimezone(SCHEDULE_TZ)
@@ -400,6 +422,8 @@ def publish(
     tags: list[str] | None = None,
     schedule_at: datetime | None = None,
     ask_code: AskCode | None = None,  # 视频号目前没有短信验证环节，为与其他平台接口一致保留
+    cover: Path | None = None,
+    options: dict | None = None,  # 视频号暂无专属配置，见 video_options.ChannelsOptions
 ) -> StorageState:
     """发布一条视频，返回刷新后的 storage_state。schedule_at 不为空时使用视频号定时发表。"""
     if schedule_at is not None:
@@ -417,6 +441,8 @@ def publish(
             _check_realtime_verification(page)
             _fill_description(page, title, tags or [], description)
             _wait_upload_complete(page, video)
+            if cover is not None:
+                _set_cover(page, cover)
             if schedule_at is not None:
                 _set_schedule(page, schedule_at)
             _set_short_title(page, title)

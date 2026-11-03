@@ -115,6 +115,10 @@ class Post(Timestamped, Base):
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     # 相对 media_dir 的路径；图文为空字符串（正文在 Article）
     video_path: Mapped[str] = mapped_column(String(500))
+    # 视频封面（竖版，各平台通用），相对 media_dir；为空用平台自动生成的。图文的封面在 Article
+    cover_path: Mapped[str | None] = mapped_column(String(500))
+    # 发布平台专属的配置，格式见 platforms/video_options.py；图片字段存相对 media_dir 的路径
+    options: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # 引入审核前的内容都是直接发布的，所以已有行默认 published
     review_status: Mapped[ReviewStatus] = mapped_column(

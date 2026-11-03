@@ -2,6 +2,21 @@
   <div>
     <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
     <el-form :model="form" label-width="90px" @submit.prevent="submit">
+      <!-- 先选账号：账号决定发到哪个平台，下面的字数限制、定时范围和专属配置都跟着平台变 -->
+      <el-form-item label="发布账号" required>
+        <div class="accounts">
+          <div v-for="group in accountGroups" :key="group.platform" class="account-group">
+            <span class="group-name"><PlatformIcon :platform="group.platform" /> {{ PLATFORMS[group.platform] }}</span>
+            <el-radio-group v-model="form.accountId">
+              <el-radio v-for="a in group.accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
+                {{ a.display_name }}
+                <span v-if="a.status !== 'active'" class="tip">（需重新登录）</span>
+              </el-radio>
+            </el-radio-group>
+          </div>
+          <div v-if="!accounts.length" class="tip">还没有可发布的账号，请先到「账号管理」添加</div>
+        </div>
+      </el-form-item>
       <el-form-item label="视频" required>
         <video v-if="videoUrl && !file" :src="videoUrl" controls class="video" />
         <el-upload :auto-upload="false" :limit="1" accept=".mp4,.mov" :on-change="pickFile" :on-remove="() => (file = null)">
@@ -9,8 +24,14 @@
           <template #tip><div class="tip">支持 mp4 / mov{{ videoUrl ? '，不选则沿用原视频' : '' }}</div></template>
         </el-upload>
       </el-form-item>
+      <el-form-item label="封面">
+        <div>
+          <CoverUpload v-model="form.coverUrl" />
+          <div class="tip">3:4 竖版，jpg / png，5MB 以内；不传由平台自动生成</div>
+        </div>
+      </el-form-item>
       <el-form-item label="标题" required>
-        <el-input v-model="form.title" maxlength="200" show-word-limit placeholder="视频号短标题会自动截取为 7~15 字" />
+        <el-input v-model="form.title" :maxlength="titleMax" show-word-limit :placeholder="rules?.titleTip" />
       </el-form-item>
       <el-form-item label="描述">
         <el-input v-model="form.description" type="textarea" :rows="4" maxlength="1000" show-word-limit />
@@ -21,21 +42,16 @@
       <el-form-item label="分类">
         <CategorySelect v-model="form.categoryId" :categories="categories" style="width: 320px" />
       </el-form-item>
-      <el-form-item label="发布账号" required>
-        <el-radio-group v-model="form.accountId">
-          <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
-            {{ PLATFORMS[a.platform] }} · {{ a.display_name }}
-            <span v-if="a.status !== 'active'" class="tip">（需重新登录）</span>
-          </el-radio>
-        </el-radio-group>
-        <div v-if="!accounts.length" class="tip">还没有可发布的账号，请先到「账号管理」添加</div>
-      </el-form-item>
       <el-form-item label="定时发布">
         <div>
           <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
-          <div class="tip">视频号需在 10 分钟后、30 天内；抖音需在 2 小时后、14 天内。审核通过点「发布」时还可以修改</div>
+          <div class="tip">{{ scheduleTip }}。审核通过点「发布」时还可以修改</div>
         </div>
       </el-form-item>
+      <template v-if="optionsForm">
+        <el-divider content-position="left">{{ PLATFORMS[platform] }}专属配置</el-divider>
+        <component :is="optionsForm" v-model="form.options" />
+      </template>
       <el-form-item v-if="submitting && file" label="上传进度">
         <el-progress :percentage="progress" style="width: 100%" />
       </el-form-item>
@@ -48,12 +64,18 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
-import { PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
+import { PLATFORMS, VIDEO_PLATFORMS, VIDEO_RULES } from '../platforms'
 import CategorySelect from './CategorySelect.vue'
+import CoverUpload from './CoverUpload.vue'
+import PlatformIcon from './PlatformIcon.vue'
+import DouyinOptions from './video-options/DouyinOptions.vue'
+
+// 各平台的专属配置表单，没有专属配置的平台不用登记
+const OPTION_FORMS = { douyin: DouyinOptions }
 
 // 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选
 const props = defineProps({
@@ -71,9 +93,58 @@ const accounts = ref([])
 const file = ref(null)
 const submitting = ref(false)
 const progress = ref(0)
-const form = reactive({ title: '', description: '', tags: [], categoryId: props.defaultCategory, accountId: null, scheduledAt: null })
+// optionsPlatform：options 是按哪个平台填的，换到其他平台的账号时要清空
+const form = reactive({
+  title: '',
+  description: '',
+  tags: [],
+  coverUrl: '',
+  categoryId: props.defaultCategory,
+  accountId: null,
+  scheduledAt: null,
+  options: {},
+  optionsPlatform: null,
+})
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 let saved = ''
+
+const accountGroups = computed(() =>
+  VIDEO_PLATFORMS.map((platform) => ({ platform, accounts: accounts.value.filter((a) => a.platform === platform) })).filter(
+    (g) => g.accounts.length,
+  ),
+)
+const platformOf = (id) => accounts.value.find((a) => a.id === id)?.platform ?? null
+const platform = computed(() => platformOf(form.accountId))
+const rules = computed(() => VIDEO_RULES[platform.value])
+const titleMax = computed(() => rules.value?.titleMax ?? 200)
+const optionsForm = computed(() => OPTION_FORMS[platform.value])
+const scheduleTip = computed(() =>
+  rules.value
+    ? `${PLATFORMS[platform.value]}需在 ${rules.value.schedule}`
+    : VIDEO_PLATFORMS.map((p) => `${PLATFORMS[p]}需在 ${VIDEO_RULES[p].schedule}`).join('；'),
+)
+
+watch(
+  () => form.accountId,
+  async (id, oldId) => {
+    const next = platformOf(id)
+    if (!next || next === form.optionsPlatform) return
+    if (form.optionsPlatform && Object.values(form.options).some(Boolean)) {
+      try {
+        await ElMessageBox.confirm(
+          `换成${PLATFORMS[next]}的账号后，已填的${PLATFORMS[form.optionsPlatform]}专属配置会清空`,
+          '切换发布平台',
+          { type: 'warning', confirmButtonText: '切换', cancelButtonText: '不切换' },
+        )
+      } catch {
+        form.accountId = oldId
+        return
+      }
+    }
+    form.options = {}
+    form.optionsPlatform = next
+  },
+)
 
 const snapshot = () => JSON.stringify(form)
 
@@ -88,9 +159,10 @@ function pickFile(uploadFile) {
 }
 
 async function submit() {
+  if (!form.accountId) return ElMessage.warning('请选择发布账号')
   if (!file.value && !videoUrl.value) return ElMessage.warning('请选择视频')
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
-  if (!form.accountId) return ElMessage.warning('请选择发布账号')
+  if (form.title.length > titleMax.value) return ElMessage.warning(`${PLATFORMS[platform.value]}标题最多 ${titleMax.value} 字`)
 
   const body = new FormData()
   if (file.value) body.append('video', file.value)
@@ -99,6 +171,9 @@ async function submit() {
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
   body.append('account_id', form.accountId)
+  body.append('cover_url', form.coverUrl)
+  // 没填的项不传，后端按未设置处理
+  body.append('options', JSON.stringify(Object.fromEntries(Object.entries(form.options).filter(([, v]) => v))))
   if (form.categoryId) body.append('category_id', form.categoryId)
   if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
@@ -124,8 +199,16 @@ onMounted(async () => {
   accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
   if (postId || copyFrom) {
     const post = (await api.get(`/posts/${postId || copyFrom}`)).data
-    // 复制时沿用原分类
-    Object.assign(form, { title: post.title, description: post.description, tags: post.tags, categoryId: post.category_id })
+    // 复制时沿用原分类、封面；专属配置在选了同平台的账号时沿用。原账号已移除时不知道配置属于哪个平台，丢掉
+    Object.assign(form, {
+      title: post.title,
+      description: post.description,
+      tags: post.tags,
+      coverUrl: post.cover_url,
+      categoryId: post.category_id,
+      options: post.account ? { ...post.options } : {},
+      optionsPlatform: post.account?.platform ?? null,
+    })
     videoUrl.value = post.video_url
     if (postId) {
       form.accountId = post.account?.id ?? null
@@ -140,6 +223,21 @@ onMounted(async () => {
 <style scoped>
 .note {
   margin-bottom: 16px;
+}
+.accounts {
+  width: 100%;
+}
+.account-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.group-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 80px;
+  flex: none;
 }
 .video {
   display: block;

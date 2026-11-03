@@ -52,7 +52,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 - `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status` 和提交时选的 `account_id`，账号被移除后为空、要修改时重新选）/ `PublishTask`（每条内容一条，**点「发布」时才生成**；引入单账号前发布的旧内容可能有多条）/ `Category`（内容分类，租户内一棵树，`Post.category_id` 为空是未分类）。
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
-- `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
+- `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`video_options.py` 定义发布视频时各平台的标题字数上限和**专属配置**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
 - `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
 - `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`categories`（内容分类）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，任务列表、重试、失败截图）。
@@ -69,7 +69,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - **发布不可重复**：`run_publish_task` 用 `acks_late=False`，并用 `UPDATE ... WHERE status='queued'` 抢占任务。宁可漏发不可重发。
 - **定时发布两种模式**：`scheduling.NATIVE_SCHEDULE` 里的平台在提交时就把定时时间交给平台（视频号：10 分钟后～30 天内；抖音：2 小时后～14 天内；都按北京时间）；其他平台建任务时状态为 `scheduled`，由 beat 到点改为 `queued`。不要用 Celery 的 `eta` 做长延时（Redis visibility timeout 会导致重复投递）。
 - **平台模块的写法**（参考 `channels.py` / `douyin.py`，接口保持一致，任务层不区分平台）：
-  - `login(on_qr, on_status, ask_code) -> (storage_state, {"external_id", "nickname", "avatar_url"})`；`check(state) -> state`；`publish(state, video, title, description, tags, schedule_at, ask_code) -> state`；
+  - `login(on_qr, on_status, ask_code) -> (storage_state, {"external_id", "nickname", "avatar_url"})`；`check(state) -> state`；`publish(state, video, title, description, tags, schedule_at, ask_code, cover, options) -> state`（`cover` 竖封面文件路径，`options` 本平台专属配置，图片字段已换成文件路径）；
   - 用同步 API（`patchright.sync_api`），登录态作为 dict 传入/传出；
   - 平台要求短信验证码时调用 `ask_code(提示, 弹窗截图)`，返回客户输入的验证码；
   - 发布、检测成功后返回刷新后的 `storage_state`，由任务写回数据库；
@@ -78,6 +78,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - **数据库用 Alembic 迁移**（2026-11-03 引入）：配置和迁移文件在 `backend/app/alembic.ini`、`backend/app/migrations/`（放在 app 里是因为开发环境只挂载了 app 目录）。backend 启动时由 `app.migrate.upgrade()` 升级到最新版本；引入前用 `create_all` 建的库会先自动标记为 `0001`。改模型后在 backend 容器里生成迁移并检查内容：`alembic -c app/alembic.ini revision --autogenerate -m "说明"`，再用 `alembic -c app/alembic.ini check` 确认模型和库一致。不要手改生产库。
 - 非原生枚举字段（`Enum(..., native_enum=False)`）的列宽按建表时最长的取值确定，以后要加更长的取值时先写迁移改列宽；新枚举字段直接写明 `length`。
 - **内容审核**：提交（视频/图文）后状态为「待审核」，不生成发布任务；「通过」后为「待发布」，需要人手动点「发布」才生成 `PublishTask`（之后的排队、定时、重试不变）；「退回」需填原因，退回/待审核/待发布的内容都可以修改，修改后回到待审核；已发布的不能修改、删除。状态变更都按当前状态条件 `UPDATE`，重复点击只生效一次。点「发布」时**重新校验账号状态和定时范围**（审核期间可能过期），发布时可以改定时。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。旧数据迁移时都标为「已发布」。
+- **视频表单 = 通用字段 + 平台专属配置**（2026-11-03，用户确认）：视频、竖封面（3:4，可不传）、标题、描述、话题、分类、定时是通用字段，存在 `Post` 上；只有某个平台才有的选项存 `Post.options`（JSON），每个平台一个 pydantic 模型（`video_options.py`，`extra="forbid"`），提交时按所选账号的平台校验，标题字数上限也按平台。图片字段接口里传 `/api/video-covers/...` 地址、库里存相对 media_dir 的路径。前端先选账号（按平台分组），下面的字数、定时提示跟着平台变，专属配置组件放 `components/video-options/`、登记在 `VideoForm.vue` 的 `OPTION_FORMS`；换成其他平台的账号时确认后清空专属配置。复制到同平台账号时沿用配置。视频封面和图文图片一样不随内容删除（复制出来的内容共用）。加新选项：后端模型 + 前端组件 + `platforms.js` 的 `VIDEO_OPTION_LABELS`（详情页显示名）+ 平台模块读取。
 - **前端入口是「内容管理」页**（`views/Contents.vue`）：列表里完成新建、修改、审核、发布、删除。发布视频用弹窗、发布图文用宽抽屉（表单组件 `components/VideoForm.vue` / `ArticleForm.vue`）；有未提交的改动时关闭要确认，提交中不能关。旧地址 `/publish`、`/publish-article`、`/review` 都重定向到这里。
 - **内容分类**（2026-11-03）：租户内多级分类，最多 3 层（后端 `routers/categories.py` 的 `MAX_DEPTH` 和前端 `src/categories.js` 要一致），一条内容一个分类、可以不选。按分类筛选时包含下级分类；有下级分类或内容的分类不能删除（不自动改成未分类）。分类只是归档：任何状态的内容（包括已发布）都能批量「移到分类」，不需要重新审核、不改 `updated_at`。内容管理页左侧是分类树，另有「只看我提交的」筛选。以后做权限时按分类给用户分配可管理范围（用户已确认）。
 - **复制**：内容列表和详情可以复制任意状态的内容，换个账号再提交（账号、定时清空，分类沿用）。视频提交时带 `copy_from`，后端给原视频建硬链接，不重新上传、也不和原内容共用路径（删除内容会删视频文件）；图文直接引用同一批图片（正文图片和封面不随内容删除）。视频只能复制到视频渠道、图文只能到公众号。
@@ -114,6 +115,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - 验证通过一次后，同一浏览器环境再扫码可能不再要求短信验证。
 - 账号信息用登录后的 `GET /web/api/media/user/info/` 读取，以 `user.uid` 作为 `external_id`（抖音号客户可以改，不能用来去重）。
 - 发布页：上传后跳到 `/creator-micro/content/post/video`；标题 `input[placeholder*="填写作品标题"]`（最多 30 字），描述是 `div.zone-container[contenteditable]`；定时发布在 `.semi-input[placeholder="日期和时间"]` 输入 `YYYY-MM-DD HH:MM` 后回车，**超出范围抖音会把值改回默认（当前 + 2 小时）**，必须回读核对。
+- 封面（2026-11-03 实测）：上传完成后表单里有「竖封面3:4」「横封面4:3」两个入口（`[class^="coverControl-"]`），打开的是同一个弹窗 `div.dy-creator-content-modal`，顶部切换「设置竖封面 / 设置横封面」。上传框要用 `.semi-upload:has(.semi-upload-drag-area-main-text)` 里的那个（左侧「生成参考图」还有一个）。切到横封面时抖音会先把竖封面同步过去，再上传会覆盖。点「完成」后弹窗消失即成功，随后抖音自动做「封面检测」。
 - 没有移植上游的两个默认行为：自动勾选「内容由AI生成」声明、打开同步到其他平台开关（都是上游自己的业务需要）。
 - 扫码登录调试经验：不要猜页面结构，先让程序在状态变化时记录整页截图 + 面板 HTML，再写选择器。
 
@@ -194,7 +196,7 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 上线前建议必做：
 
 1. 两个平台的**立即发布**各用真实账号验证一次（需用户同意，会立刻公开）。
-2. **自定义封面**（现在用平台自动生成的封面）。
+2. **自定义封面**：抖音竖/横封面已完成并实测（做到上传封面为止，未真实发布过）；视频号竖封面按上游选择器写好**未实测**（账号 5 登录态已失效，需用户重新扫码后验证）。视频号也有 4:3 横封面（「视频号动态」），还没做。
 3. **AI 内容声明 / 自主声明**（抖音「自主声明」、视频号「视频标注」；若客户发 AI 内容则关系到平台合规）。不要照搬上游的强制勾选，做成发布时可选。
 4. **登录失效主动通知客户**（现在只在账号列表标「需重新登录」）。
 5. **视频格式预检查**（大小、时长、比例），不合规的提交时就拒绝。

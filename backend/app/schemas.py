@@ -128,8 +128,11 @@ class PostDetailOut(PostOut):
     description: str
     tags: list[str]
     video_url: str | None = None
+    # 视频：发布平台专属配置，图片字段是地址
+    options: dict = {}
     author: str = ""
     content: str = ""
+    # 视频的竖封面或图文封面，视频没传封面时为空
     cover_url: str = ""
     source_url: str = ""
     open_comment: bool = False

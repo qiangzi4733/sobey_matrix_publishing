@@ -312,6 +312,38 @@ def _set_schedule(page: Page, when: datetime) -> None:
     page.get_by_text("发布设置", exact=True).click()
 
 
+def _set_covers(page: Page, portrait: Path | None, landscape: Path | None) -> None:
+    """上传自定义封面。2026-11-03 实测：表单里「竖封面3:4」「横封面4:3」打开同一个弹窗，
+    弹窗顶部切换「设置竖封面 / 设置横封面」，各自用「上传封面」；切到横封面时抖音会先把竖封面同步过去，
+    再上传就覆盖掉。只设一张时另一张由抖音自动生成。"""
+    if portrait is None and landscape is None:
+        return
+    page.evaluate(
+        "() => document.querySelectorAll('.shepherd-element, .shepherd-modal-overlay-container').forEach(e => e.remove())"
+    )
+    page.locator('[class^="coverControl-"]').filter(has_text="竖封面3:4").locator('[class^="cover-"]').first.click()
+    modal = page.locator("div.dy-creator-content-modal").first
+    try:
+        modal.wait_for(state="visible", timeout=15000)
+    except PWTimeout:
+        raise PublishError("封面设置弹窗没有打开", screenshot(page, "douyin_cover")) from None
+    for tab, image in (("设置竖封面", portrait), ("设置横封面", landscape)):
+        if image is None:
+            continue
+        modal.get_by_text(tab, exact=True).first.click()
+        page.wait_for_timeout(1500)
+        # 弹窗左侧「生成参考图」也有一个上传框，要用带「点击上传文件或拖拽」的那个
+        modal.locator(
+            ".semi-upload:has(.semi-upload-drag-area-main-text) input.semi-upload-hidden-input"
+        ).first.set_input_files(str(image))
+        page.wait_for_timeout(5000)
+    modal.get_by_role("button", name="完成", exact=True).click()
+    try:
+        modal.wait_for(state="detached", timeout=15000)
+    except PWTimeout:
+        raise PublishError("封面没有设置成功", screenshot(page, "douyin_cover")) from None
+
+
 def _ensure_cover(page: Page) -> None:
     """没有封面时抖音不让发布，选第一个推荐封面。"""
     if not _visible(page.get_by_text("请设置封面后再发布")):
@@ -353,8 +385,12 @@ def publish(
     tags: list[str] | None = None,
     schedule_at: datetime | None = None,
     ask_code: AskCode | None = None,
+    cover: Path | None = None,
+    options: dict | None = None,
 ) -> StorageState:
-    """发布一条视频，返回刷新后的 storage_state。schedule_at 不为空时使用抖音定时发布。"""
+    """发布一条视频，返回刷新后的 storage_state。schedule_at 不为空时使用抖音定时发布。
+    cover 是竖封面，横封面在 options（见 video_options.DouyinOptions）。"""
+    options = options or {}
     if schedule_at is not None:
         try:
             validate_native_schedule(Platform.douyin, schedule_at)
@@ -369,6 +405,7 @@ def publish(
             _upload_file(page, video, ask_code)
             _fill_form(page, title, description, tags or [])
             _wait_upload_complete(page, video)
+            _set_covers(page, cover, options.get("cover_landscape"))
             if schedule_at is not None:
                 _set_schedule(page, schedule_at)
             _submit(page, ask_code)

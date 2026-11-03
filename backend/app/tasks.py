@@ -12,6 +12,7 @@ from app import login_sessions, verification
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Account, AccountStatus, Platform, Post, PublishResult, PublishStatus, PublishTask
+from app.platforms import video_options
 from app.platforms.base import LoginExpired, PublishError
 from app.security import decrypt_credentials, encrypt_credentials
 from app.worker import celery_app
@@ -235,15 +236,18 @@ def run_publish_task(task_id: int) -> None:
             else:
                 module = _browser_module(task.platform)
                 post = task.post
+                media_dir = Path(get_settings().media_dir)
                 state = decrypt_credentials(account.credentials_encrypted)["storage_state"]
                 new_state = module.publish(
                     state,
-                    Path(get_settings().media_dir) / post.video_path,
+                    media_dir / post.video_path,
                     title=post.title,
                     description=post.description,
                     tags=post.tags,
                     schedule_at=post.scheduled_at,
                     ask_code=verification.asker(f"task:{task_id}"),
+                    cover=media_dir / post.cover_path if post.cover_path else None,
+                    options=video_options.for_publish(post.options, media_dir),
                 )
                 account.credentials_encrypted = encrypt_credentials({"storage_state": new_state})
             task.status = PublishStatus.success

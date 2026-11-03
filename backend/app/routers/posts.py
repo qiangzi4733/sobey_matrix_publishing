@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import shutil
 import uuid
 from datetime import UTC, datetime
@@ -14,6 +16,7 @@ from app import tasks, verification
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
 from app.models import Account, AccountStatus, Article, Platform, Post, PublishStatus, PublishTask, ReviewStatus
+from app.platforms import video_options
 from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
 from app.platforms.wechat_mp import ARTICLE_IMAGE_URL, article_image_path
 from app.routers.categories import get_category, subtree_ids
@@ -38,6 +41,9 @@ VIDEO_SUFFIXES = {".mp4", ".mov"}
 # 公众号正文图片只支持 jpg/png、1MB 以内；封面（永久素材）10MB 以内，这里统一按正文图片的要求
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 IMAGE_MAX_BYTES = 1024 * 1024
+# 视频封面（通用的竖封面和平台专属配置里的图片）。各平台上限不一，按较宽的 5MB，平台自己会再压缩
+VIDEO_COVER_MAX_BYTES = 5 * 1024 * 1024
+VIDEO_COVER_URL = re.compile(r"/api/(video-covers/(\d+)/[0-9a-f]{32}\.(?:jpg|jpeg|png))")
 
 
 def _split(value: str) -> list[str]:
@@ -134,6 +140,12 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
     if not detail:
         return PostOut(**fields)
     out = PostDetailOut(**fields, description=post.description, tags=post.tags)
+    if post.cover_path:
+        out.cover_url = f"/api/{post.cover_path}"
+    # 图片字段在库里是路径，给前端换回地址
+    out.options = {
+        key: f"/api/{value}" if key in video_options.IMAGE_FIELDS else value for key, value in post.options.items()
+    }
     if post.article:
         out.author = post.article.author
         out.content = post.article.content
@@ -187,6 +199,31 @@ def _save_video(user: CurrentUser, video: UploadFile) -> str:
     return str(relative)
 
 
+def _video_cover(user: CurrentUser, url: str) -> str:
+    """封面地址换成相对 media_dir 的路径；只能用本租户上传的图片。"""
+    match = VIDEO_COVER_URL.fullmatch(url)
+    if not match or match.group(2) != str(user.tenant_id) or not (Path(get_settings().media_dir) / match.group(1)).is_file():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "封面图片不存在，请重新上传")
+    return match.group(1)
+
+
+def _fill_video(post: Post, user: CurrentUser, account: Account, title: str, cover_url: str, options: str) -> None:
+    """通用字段之外，按发布账号所在平台校验标题长度和专属配置。"""
+    title_max = video_options.TITLE_MAX[account.platform]
+    if len(title) > title_max:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"该平台的标题最多 {title_max} 字")
+    try:
+        parsed = video_options.parse(account.platform, json.loads(options or "{}"))
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "平台配置不正确，请刷新后重试") from None
+    values = parsed.model_dump(exclude_none=True)
+    for key in parsed.IMAGE_FIELDS & values.keys():
+        values[key] = _video_cover(user, values[key])
+    post.title = title
+    post.cover_path = _video_cover(user, cover_url) if cover_url else None
+    post.options = values
+
+
 def _copy_video(db: DbSession, user: CurrentUser, source_id: int) -> str:
     source = _get_post(db, user, source_id)
     media_dir = Path(get_settings().media_dir)
@@ -218,6 +255,8 @@ def create_post(
     scheduled_at: Annotated[datetime | None, Form()] = None,
     video: Annotated[UploadFile | None, File()] = None,
     copy_from: Annotated[int | None, Form(description="复制这条内容的视频，不用重新上传")] = None,
+    cover_url: Annotated[str, Form(description="竖封面，先传到 /api/video-covers；不传用平台自动生成的")] = "",
+    options: Annotated[str, Form(description="平台专属配置 JSON，格式见 platforms/video_options.py")] = "{}",
 ) -> PostOut:
     """上传视频并提交审核；审核通过后手动发布到选中的账号。"""
     if (video is None) == (copy_from is None):
@@ -227,13 +266,14 @@ def create_post(
     post = Post(
         tenant_id=user.tenant_id,
         created_by=user.id,
-        title=title,
         description=description,
         tags=[t.lstrip("#") for t in _split(tags)],
-        video_path=_save_video(user, video) if video is not None else _copy_video(db, user, copy_from),
         scheduled_at=scheduled_at,
         category_id=_post_category(db, user, category_id),
     )
+    # 先校验完再存视频，校验不过不留下孤儿文件
+    _fill_video(post, user, account, title, cover_url, options)
+    post.video_path = _save_video(user, video) if video is not None else _copy_video(db, user, copy_from)
     return _submit_for_review(db, post, account)
 
 
@@ -249,19 +289,46 @@ def update_post(
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
     video: Annotated[UploadFile | None, File(description="不传则沿用原视频")] = None,
+    cover_url: Annotated[str, Form(description="不传则不用自定义封面")] = "",
+    options: Annotated[str, Form()] = "{}",
 ) -> PostOut:
     post = _get_editable(db, user, post_id, "video")
     account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频")
     _check_schedule(scheduled_at, account)
+    _fill_video(post, user, account, title, cover_url, options)
     if video is not None:
         _remove_video(post)
         post.video_path = _save_video(user, video)
-    post.title = title
     post.description = description
     post.tags = [t.lstrip("#") for t in _split(tags)]
     post.scheduled_at = scheduled_at
     post.category_id = _post_category(db, user, category_id)
     return _submit_for_review(db, post, account)
+
+
+@router.post("/video-covers", response_model=ImageOut, status_code=status.HTTP_201_CREATED)
+def upload_video_cover(user: CurrentUser, image: Annotated[UploadFile, File()]) -> ImageOut:
+    """上传视频封面，返回提交视频时用的地址。和图文图片一样不随内容删除：复制出来的内容引用同一张。"""
+    suffix = Path(image.filename or "").suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持 jpg / png 图片")
+    data = image.file.read(VIDEO_COVER_MAX_BYTES + 1)
+    if len(data) > VIDEO_COVER_MAX_BYTES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "封面不能超过 5MB")
+    relative = Path("video-covers") / str(user.tenant_id) / f"{uuid.uuid4().hex}{suffix}"
+    target = Path(get_settings().media_dir) / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return ImageOut(url=f"/api/{relative}")
+
+
+# 不校验登录：<img> 带不上令牌。文件名是随机 UUID，无法枚举
+@router.get("/video-covers/{tenant_id}/{name}")
+def video_cover(tenant_id: int, name: str) -> FileResponse:
+    match = VIDEO_COVER_URL.fullmatch(f"/api/video-covers/{tenant_id}/{name}")
+    if not match or not (path := Path(get_settings().media_dir) / match.group(1)).is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "图片不存在")
+    return FileResponse(path)
 
 
 @router.post("/article-images", response_model=ImageOut, status_code=status.HTTP_201_CREATED)

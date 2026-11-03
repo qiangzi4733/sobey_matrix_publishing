@@ -12,6 +12,17 @@ export const QR_LOGIN_PLATFORMS = ['channels', 'douyin']
 export const VIDEO_PLATFORMS = ['channels', 'douyin']
 export const ARTICLE_PLATFORMS = ['wechat_mp']
 
+// 发布视频时各平台不同的规则，和后端 platforms/video_options.py、scheduling.py 保持一致
+export const VIDEO_RULES = {
+  douyin: { titleMax: 30, schedule: '2 小时后、14 天内' },
+  channels: { titleMax: 200, schedule: '10 分钟后、30 天内', titleTip: '视频号短标题会自动截取为 7~15 字' },
+}
+
+// 平台专属配置在内容详情里的显示名；image 表示值是图片地址
+export const VIDEO_OPTION_LABELS = {
+  cover_landscape: { label: '横封面', image: true },
+}
+
 export const REVIEW_STATUS = {
   pending: { label: '待审核', type: 'warning' },
   rejected: { label: '已退回', type: 'danger' },
