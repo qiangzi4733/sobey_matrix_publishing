@@ -50,6 +50,14 @@ class AccountUpdate(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
 
 
+class AccountUsageOut(BaseModel):
+    """移除账号前给客户看的影响范围。"""
+
+    posts: int  # 选了这个账号、还没点发布的内容
+    pending_tasks: int  # 排队中、等定时的发布任务，移除后会标为失败
+    running_tasks: int  # 正在发布，有的话不能移除
+
+
 class LoginStartOut(BaseModel):
     login_id: str
 

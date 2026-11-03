@@ -78,6 +78,18 @@ def qr_login(login_id: str) -> None:
         return
 
     with SessionLocal() as db:
+        # 在某个账号上点「重新扫码」却扫了另一个号：不能新增，否则原账号仍然失效而客户以为已经修好
+        if relogin_id := session.get("relogin_account_id"):
+            target = db.get(Account, relogin_id)
+            if target is not None and target.external_id != profile["external_id"]:
+                login_sessions.update(
+                    login_id,
+                    status="failed",
+                    message=f"扫码的是「{profile.get('nickname') or profile['external_id']}」，"
+                    f"不是要重新登录的「{target.display_name}」，请用该账号的手机重新扫码",
+                    qr=None,
+                )
+                return
         account = db.scalar(
             select(Account).where(
                 Account.tenant_id == tenant_id,

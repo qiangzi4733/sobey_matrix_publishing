@@ -32,6 +32,8 @@ const props = defineProps({
   visible: Boolean,
   platform: { type: String, required: true },
   title: { type: String, default: '扫码登录' },
+  // 重新登录某个已有账号时传入，扫到别的号后端会拒绝
+  accountId: { type: Number, default: null },
 })
 const emit = defineEmits(['update:visible', 'success'])
 
@@ -64,7 +66,8 @@ async function poll() {
 async function start() {
   stopPolling()
   session.value = { status: 'starting', message: '正在打开登录页…', qr: null }
-  const { data } = await api.post(`/accounts/login/${props.platform}`)
+  const params = props.accountId ? { account_id: props.accountId } : {}
+  const { data } = await api.post(`/accounts/login/${props.platform}`, null, { params })
   loginId = data.login_id
   poll()
 }

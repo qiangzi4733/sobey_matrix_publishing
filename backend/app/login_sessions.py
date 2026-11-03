@@ -17,9 +17,15 @@ def _key(login_id: str) -> str:
     return f"login_session:{login_id}"
 
 
-def create(tenant_id: int, platform: str) -> str:
+def create(tenant_id: int, platform: str, relogin_account_id: int | None = None) -> str:
     login_id = uuid.uuid4().hex
-    data = {"tenant_id": tenant_id, "platform": platform, "status": "starting", "message": "正在打开登录页"}
+    data = {
+        "tenant_id": tenant_id,
+        "platform": platform,
+        "relogin_account_id": relogin_account_id,
+        "status": "starting",
+        "message": "正在打开登录页",
+    }
     _redis.set(_key(login_id), json.dumps(data), ex=TTL_SECONDS)
     return login_id
 
