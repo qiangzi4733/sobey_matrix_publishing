@@ -29,10 +29,12 @@ class PublishStatus(str, enum.Enum):
 
 
 class ReviewStatus(str, enum.Enum):
+    """审核状态。发布状态另看 Post.current_task（点了「发布」才有）。"""
+
+    draft = "draft"  # 草稿，只有提交人自己看得到，可以不填完整
     pending = "pending"  # 待审核
     rejected = "rejected"  # 已退回，可修改后重新提交
-    approved = "approved"  # 审核通过，等人手动点发布
-    published = "published"  # 已点发布，按账号生成了 PublishTask
+    approved = "approved"  # 审核通过；没有 current_task 时等人手动点发布
 
 
 class UserRole(str, enum.Enum):
@@ -120,10 +122,7 @@ class Post(Timestamped, Base):
     # 发布平台专属的配置，格式见 platforms/video_options.py；图片字段存相对 media_dir 的路径
     options: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # 引入审核前的内容都是直接发布的，所以已有行默认 published
-    review_status: Mapped[ReviewStatus] = mapped_column(
-        Enum(ReviewStatus, native_enum=False, length=20), index=True, server_default=ReviewStatus.published.value
-    )
+    review_status: Mapped[ReviewStatus] = mapped_column(Enum(ReviewStatus, native_enum=False, length=20), index=True)
     # 一条内容只发一个账号，点发布时才生成 PublishTask；账号被移除后为空，要修改时重新选
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     # 为空是「未分类」；有内容的分类不能删除，外键不会真的触发置空
@@ -131,8 +130,17 @@ class Post(Timestamped, Base):
     review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 这一轮的发布任务，发布状态以它为准。发布失败后修改内容会清空（旧任务留在发布记录里），重新审核后再发布
+    current_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("publish_tasks.id", ondelete="SET NULL", use_alter=True)
+    )
 
-    tasks: Mapped[list["PublishTask"]] = relationship(back_populates="post")
+    # 删除内容时由数据库级联删除发布记录
+    tasks: Mapped[list["PublishTask"]] = relationship(
+        back_populates="post", foreign_keys="PublishTask.post_id", passive_deletes=True
+    )
+    # posts 和 publish_tasks 互相引用，post_update 让 SQLAlchemy 分两步写
+    current_task: Mapped["PublishTask | None"] = relationship(foreign_keys=[current_task_id], post_update=True)
     account: Mapped["Account | None"] = relationship()
     # 正文跟着内容一起删（删除未发布的内容时）
     article: Mapped["Article | None"] = relationship(cascade="all, delete-orphan")
@@ -175,7 +183,7 @@ class PublishTask(Timestamped, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    post: Mapped[Post] = relationship(back_populates="tasks")
+    post: Mapped[Post] = relationship(back_populates="tasks", foreign_keys=[post_id])
     account: Mapped[Account | None] = relationship()
     result: Mapped["PublishResult | None"] = relationship()
 

@@ -23,12 +23,26 @@ export const VIDEO_OPTION_LABELS = {
   cover_landscape: { label: '横封面', image: true },
 }
 
+// 审核状态和发布状态分开显示；发布状态是这一轮发布任务的结果，没点「发布」时为空
 export const REVIEW_STATUS = {
+  draft: { label: '草稿', type: 'info' },
   pending: { label: '待审核', type: 'warning' },
   rejected: { label: '已退回', type: 'danger' },
-  approved: { label: '待发布', type: 'primary' },
-  published: { label: '已发布', type: 'success' },
+  approved: { label: '已通过', type: 'success' },
 }
+
+export const PUBLISH_STATUS = {
+  publishing: { label: '发布中', type: 'primary' },
+  // 平台自带定时的已交给平台、或等本平台到点提交，到点前都不对外可见
+  scheduled: { label: '已定时', type: 'warning' },
+  success: { label: '发布成功', type: 'success' },
+  draft_saved: { label: '已存草稿', type: 'success' },
+  failed: { label: '发布失败', type: 'danger' },
+}
+
+// 没点过发布、或这一轮发布失败的内容可以修改、删除（和后端 _get_editable 一致）
+export const isEditable = (post) => !post.publish_status || post.publish_status === 'failed'
+
 
 // 客户都在国内，时间一律按北京时间显示，不随浏览器时区变化；格式如 2026-11-02 18:28
 const BEIJING = new Intl.DateTimeFormat('zh-CN', {

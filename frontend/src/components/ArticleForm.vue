@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
-    <el-form :model="form" label-width="90px" @submit.prevent="submit">
+    <el-form :model="form" label-width="90px" @submit.prevent="submit(false)">
       <el-form-item label="标题" required>
         <el-input v-model="form.title" maxlength="64" show-word-limit />
       </el-form-item>
@@ -65,6 +65,7 @@
       </el-form-item>
       <el-form-item>
         <el-button :disabled="submitting" @click="$emit('cancel')">取消</el-button>
+        <el-button v-if="canDraft" :disabled="submitting" @click="submit(true)">存草稿</el-button>
         <el-button type="primary" native-type="submit" :loading="submitting">提交审核</el-button>
       </el-form-item>
     </el-form>
@@ -92,6 +93,8 @@ const props = defineProps({
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
 const reviewNote = ref('')
+// 新建、复制和草稿可以存草稿；已提交的内容存草稿等于撤回审核，暂不支持
+const canDraft = ref(!postId)
 const accounts = ref([])
 const editor = ref(null)
 const imageInput = ref(null)
@@ -152,13 +155,16 @@ function pastePlain(event) {
   document.execCommand('insertText', false, event.clipboardData.getData('text/plain'))
 }
 
-async function submit() {
+// 存草稿只要求标题，其余提交审核时再校验
+async function submit(draft) {
   const content = editor.value.innerHTML.trim()
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
-  if (!form.coverUrl) return ElMessage.warning('请上传封面')
-  if (!editor.value.innerText.trim() && !content.includes('<img')) return ElMessage.warning('请填写正文')
-  if (!form.accountId) return ElMessage.warning('请选择公众号')
-  if (!form.draftOnly) {
+  if (!draft) {
+    if (!form.coverUrl) return ElMessage.warning('请上传封面')
+    if (!editor.value.innerText.trim() && !content.includes('<img')) return ElMessage.warning('请填写正文')
+    if (!form.accountId) return ElMessage.warning('请选择公众号')
+  }
+  if (!draft && !form.draftOnly) {
     await ElMessageBox.confirm('审核通过并发布后文章对外可见，确定选择直接发表？', '直接发表', { type: 'warning' })
   }
 
@@ -176,11 +182,12 @@ async function submit() {
       account_id: form.accountId,
       category_id: form.categoryId,
       scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
+      draft,
     }
     if (postId) await api.put(`/articles/${postId}`, body)
     else await api.post('/articles', body)
-    ElMessage.success('已提交审核')
-    emit('saved')
+    ElMessage.success(draft ? '已存为草稿' : '已提交审核')
+    emit('saved', draft)
   } finally {
     submitting.value = false
   }
@@ -207,6 +214,7 @@ onMounted(async () => {
       form.accountId = post.account?.id ?? null
       form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
       reviewNote.value = post.review_note || ''
+      canDraft.value = post.review_status === 'draft'
     }
   }
   saved = snapshot()

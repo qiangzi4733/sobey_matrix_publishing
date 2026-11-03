@@ -91,6 +91,7 @@ class PublishTaskOut(BaseModel):
     draft: bool = False
     # 发布中平台要求短信验证码，等客户输入
     needs_code: bool = False
+    can_retry: bool = False
     scheduled_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
@@ -111,12 +112,16 @@ class PostOut(BaseModel):
     kind: str  # video / article
     title: str
     review_status: ReviewStatus
+    # 这一轮的发布状态：publishing / scheduled / success / draft_saved（公众号只存了草稿）/ failed；没点发布为空
+    publish_status: str | None
     review_note: str | None
     reviewer_name: str | None
     reviewed_at: datetime | None
     creator_name: str | None
     # 账号被移除后为空
     account: PostAccountOut | None
+    # 发布任务记下的账号名，账号被移除后显示用
+    account_name: str | None
     # 为空是未分类；前端按分类列表拼出完整路径
     category_id: int | None
     scheduled_at: datetime | None
@@ -157,14 +162,16 @@ class ArticleIn(BaseModel):
     title: str = Field(min_length=1, max_length=64)
     author: str = Field(default="", max_length=16)
     digest: str = Field(default="", max_length=120)
-    content: str = Field(min_length=1, max_length=200_000)
-    cover_url: str
+    # 存草稿时正文、封面、公众号都可以先不填
+    content: str = Field(default="", max_length=200_000)
+    cover_url: str = ""
     source_url: str = Field(default="", max_length=500, pattern=r"^(https?://.*)?$")
     open_comment: bool = False
     draft_only: bool = True
-    account_id: int
+    account_id: int | None = None
     category_id: int | None = None
     scheduled_at: datetime | None = None
+    draft: bool = False
 
 
 class CategoryIn(BaseModel):

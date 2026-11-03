@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
-    <el-form :model="form" label-width="90px" @submit.prevent="submit">
+    <el-form :model="form" label-width="90px" @submit.prevent="submit(false)">
       <!-- 先选账号：账号决定发到哪个平台，下面的字数限制、定时范围和专属配置都跟着平台变 -->
       <el-form-item label="发布账号" required>
         <div class="accounts">
@@ -57,6 +57,7 @@
       </el-form-item>
       <el-form-item>
         <el-button :disabled="submitting" @click="$emit('cancel')">取消</el-button>
+        <el-button v-if="canDraft" :disabled="submitting" @click="submit(true)">存草稿</el-button>
         <el-button type="primary" native-type="submit" :loading="submitting">提交审核</el-button>
       </el-form-item>
     </el-form>
@@ -88,6 +89,8 @@ const props = defineProps({
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
 const reviewNote = ref('')
+// 新建、复制和草稿可以存草稿；已提交的内容存草稿等于撤回审核，暂不支持
+const canDraft = ref(!postId)
 const videoUrl = ref('')
 const accounts = ref([])
 const file = ref(null)
@@ -158,19 +161,23 @@ function pickFile(uploadFile) {
   file.value = uploadFile.raw
 }
 
-async function submit() {
-  if (!form.accountId) return ElMessage.warning('请选择发布账号')
-  if (!file.value && !videoUrl.value) return ElMessage.warning('请选择视频')
+// 存草稿只要求标题，其余提交审核时再校验
+async function submit(draft) {
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
-  if (form.title.length > titleMax.value) return ElMessage.warning(`${PLATFORMS[platform.value]}标题最多 ${titleMax.value} 字`)
+  if (form.accountId && form.title.length > titleMax.value) return ElMessage.warning(`${PLATFORMS[platform.value]}标题最多 ${titleMax.value} 字`)
+  if (!draft) {
+    if (!form.accountId) return ElMessage.warning('请选择发布账号')
+    if (!file.value && !videoUrl.value) return ElMessage.warning('请选择视频')
+  }
 
   const body = new FormData()
   if (file.value) body.append('video', file.value)
-  else if (copyFrom) body.append('copy_from', copyFrom)
+  else if (copyFrom && videoUrl.value) body.append('copy_from', copyFrom)
   body.append('title', form.title)
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
-  body.append('account_id', form.accountId)
+  if (form.accountId) body.append('account_id', form.accountId)
+  if (draft) body.append('draft', 'true')
   body.append('cover_url', form.coverUrl)
   // 没填的项不传，后端按未设置处理
   body.append('options', JSON.stringify(Object.fromEntries(Object.entries(form.options).filter(([, v]) => v))))
@@ -187,8 +194,8 @@ async function submit() {
   try {
     if (postId) await api.put(`/posts/${postId}`, body, config)
     else await api.post('/posts', body, config)
-    ElMessage.success('已提交审核')
-    emit('saved')
+    ElMessage.success(draft ? '已存为草稿' : '已提交审核')
+    emit('saved', draft)
   } finally {
     submitting.value = false
   }
@@ -214,6 +221,7 @@ onMounted(async () => {
       form.accountId = post.account?.id ?? null
       form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
       reviewNote.value = post.review_note || ''
+      canDraft.value = post.review_status === 'draft'
     }
   }
   saved = snapshot()

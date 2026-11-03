@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 
 from app import login_sessions, tasks, verification
 from app.deps import CurrentUser, DbSession
-from app.models import Account, Platform, Post, PublishStatus, PublishTask, ReviewStatus
+from app.models import Account, Platform, Post, PublishStatus, PublishTask
 from app.schemas import AccountOut, AccountUsageOut, CodeIn, LoginStartOut, LoginStatusOut
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -28,7 +28,7 @@ def list_accounts(db: DbSession, user: CurrentUser, platform: Platform | None = 
 
 def _count_unpublished_posts(db: DbSession, account: Account) -> int:
     return db.scalar(
-        select(func.count()).where(Post.account_id == account.id, Post.review_status != ReviewStatus.published)
+        select(func.count()).where(Post.account_id == account.id, Post.current_task_id.is_(None))
     )
 
 

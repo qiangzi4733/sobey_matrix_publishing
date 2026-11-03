@@ -5,11 +5,11 @@ import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app import tasks, verification
@@ -64,6 +64,8 @@ def _task_out(task: PublishTask) -> PublishTaskOut:
         url=task.result.url if task.result else None,
         draft=bool(task.result and task.result.data.get("draft")),
         needs_code=task.status == PublishStatus.running and verification.pending(f"task:{task.id}") is not None,
+        # 内容在失败后被修改过，这条旧任务不能再重试（新内容要重新审核）
+        can_retry=task.status == PublishStatus.failed and task.post.current_task_id == task.id,
         scheduled_at=task.post.scheduled_at,
         started_at=task.started_at,
         finished_at=task.finished_at,
@@ -71,13 +73,18 @@ def _task_out(task: PublishTask) -> PublishTaskOut:
     )
 
 
-def _publish_account(db: DbSession, user: CurrentUser, account_id: int | None, allowed: set[Platform], kind: str) -> Account:
+def _publish_account(
+    db: DbSession, user: CurrentUser, account_id: int | None, allowed: set[Platform], kind: str, draft: bool = False
+) -> Account | None:
+    """草稿可以先不选账号，选了的账号失效也没关系，提交审核时再校验。"""
+    if draft and account_id is None:
+        return None
     account = db.get(Account, account_id) if account_id is not None else None
     if account is None or account.tenant_id != user.tenant_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "发布账号不存在或已被移除，请重新选择")
     if account.platform not in allowed:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{account.display_name}」所在平台暂不支持发布{kind}")
-    if account.status != AccountStatus.active:
+    if account.status != AccountStatus.active and not draft:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{account.display_name}」登录已失效，请先重新登录")
     return account
 
@@ -111,9 +118,9 @@ def _create_task(db: DbSession, user: CurrentUser, post: Post, account: Account)
         account_name=account.display_name,
         platform=account.platform,
         status=PublishStatus.scheduled if post.scheduled_at and not native else PublishStatus.queued,
+        post=post,
     )
-    post.tasks = [task]
-    db.add(post)
+    post.current_task = task
     db.commit()
 
     if task.status == PublishStatus.queued:
@@ -121,12 +128,35 @@ def _create_task(db: DbSession, user: CurrentUser, post: Post, account: Account)
     return _task_out(task)
 
 
+def _publish_status(post: Post) -> str | None:
+    """发布状态，按这一轮的发布任务算；没点过「发布」为空。"""
+    task = post.current_task
+    if task is None:
+        return None
+    if task.status in (PublishStatus.queued, PublishStatus.running):
+        return "publishing"
+    if task.status == PublishStatus.scheduled:
+        return "scheduled"
+    if task.status == PublishStatus.failed:
+        return "failed"
+    # 平台自带定时的，提交成功只是交给了平台，到点才对外可见
+    if post.scheduled_at and post.scheduled_at > datetime.now(UTC):
+        return "scheduled"
+    if task.result and task.result.data.get("draft"):
+        return "draft_saved"
+    return "success"
+
+
 def _post_out(post: Post, detail: bool = False) -> PostOut:
+    task = post.current_task
     fields = dict(
         id=post.id,
         kind="article" if post.article else "video",
         title=post.title,
         review_status=post.review_status,
+        publish_status=_publish_status(post),
+        # 账号被移除后，已发布的内容仍能看出发到了哪个账号
+        account_name=task.account_name if task else None,
         review_note=post.review_note,
         reviewer_name=post.reviewer.name if post.reviewer else None,
         reviewed_at=post.reviewed_at,
@@ -149,11 +179,11 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
     if post.article:
         out.author = post.article.author
         out.content = post.article.content
-        out.cover_url = f"/api/{post.article.cover_path}"
+        out.cover_url = f"/api/{post.article.cover_path}" if post.article.cover_path else ""
         out.source_url = post.article.source_url
         out.open_comment = post.article.open_comment
         out.draft_only = post.article.draft_only
-    else:
+    elif post.video_path:
         out.video_url = f"/api/posts/{post.id}/video?token={create_video_token(post.id)}"
     return out
 
@@ -161,27 +191,34 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
 def _get_post(db: DbSession, user: CurrentUser, post_id: int, lock: bool = False) -> Post:
     # 修改、删除时锁住这一行，避免和同时进行的发布交错
     post = db.get(Post, post_id, with_for_update=lock)
-    if post is None or post.tenant_id != user.tenant_id:
+    if post is None or post.tenant_id != user.tenant_id or not _visible(post, user):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "内容不存在")
     return post
 
 
-def _get_editable(db: DbSession, user: CurrentUser, post_id: int, kind: str) -> Post:
+def _visible(post: Post, user: CurrentUser) -> bool:
+    # 草稿只有提交人自己看得到
+    return post.review_status != ReviewStatus.draft or post.created_by == user.id
+
+
+def _get_editable(db: DbSession, user: CurrentUser, post_id: int, kind: str | None = None) -> Post:
+    """没点过发布、或这一轮发布失败的内容可以修改和删除。失败的内容改完要重新审核、重新发布。"""
     post = _get_post(db, user, post_id, lock=True)
-    if (post.article is not None) != (kind == "article"):
+    if kind and (post.article is not None) != (kind == "article"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "内容不存在")
-    if post.review_status == ReviewStatus.published:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已发布的内容不能修改")
+    if post.current_task and post.current_task.status != PublishStatus.failed:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已发布或正在发布的内容不能修改、删除")
     return post
 
 
-def _submit_for_review(db: DbSession, post: Post, account: Account) -> PostOut:
-    """新建或修改后都回到待审核，上一轮的审核结果清空。"""
+def _submit_for_review(db: DbSession, post: Post, account: Account | None, draft: bool = False) -> PostOut:
+    """新建或修改后存为草稿或回到待审核，上一轮的审核结果和发布任务（失败的）都清空，发布记录保留。"""
     post.account = account
-    post.review_status = ReviewStatus.pending
+    post.review_status = ReviewStatus.draft if draft else ReviewStatus.pending
     post.review_note = None
     post.reviewed_by = None
     post.reviewed_at = None
+    post.current_task = None
     db.add(post)
     db.commit()
     return _post_out(post)
@@ -207,17 +244,19 @@ def _video_cover(user: CurrentUser, url: str) -> str:
     return match.group(1)
 
 
-def _fill_video(post: Post, user: CurrentUser, account: Account, title: str, cover_url: str, options: str) -> None:
-    """通用字段之外，按发布账号所在平台校验标题长度和专属配置。"""
-    title_max = video_options.TITLE_MAX[account.platform]
-    if len(title) > title_max:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"该平台的标题最多 {title_max} 字")
+def _fill_video(post: Post, user: CurrentUser, account: Account | None, title: str, cover_url: str, options: str) -> None:
+    """通用字段之外，按发布账号所在平台校验标题长度和专属配置。草稿没选账号时不能有专属配置。"""
     try:
-        parsed = video_options.parse(account.platform, json.loads(options or "{}"))
+        data = json.loads(options or "{}")
+        parsed = video_options.parse(account.platform, data) if account else None
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "平台配置不正确，请刷新后重试") from None
-    values = parsed.model_dump(exclude_none=True)
-    for key in parsed.IMAGE_FIELDS & values.keys():
+    if parsed is None and data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先选择发布账号再填写平台配置")
+    if account and len(title) > (title_max := video_options.TITLE_MAX[account.platform]):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"该平台的标题最多 {title_max} 字")
+    values = parsed.model_dump(exclude_none=True) if parsed else {}
+    for key in (parsed.IMAGE_FIELDS if parsed else set()) & values.keys():
         values[key] = _video_cover(user, values[key])
     post.title = title
     post.cover_path = _video_cover(user, cover_url) if cover_url else None
@@ -238,6 +277,12 @@ def _copy_video(db: DbSession, user: CurrentUser, source_id: int) -> str:
     return str(relative)
 
 
+def _check_draft(post: Post, draft: bool) -> None:
+    # 已提交的内容存草稿等于撤回审核，暂不支持
+    if draft and post.review_status != ReviewStatus.draft:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已提交的内容不能存为草稿")
+
+
 def _remove_video(post: Post) -> None:
     if post.video_path:
         (Path(get_settings().media_dir) / post.video_path).unlink(missing_ok=True)
@@ -248,7 +293,7 @@ def create_post(
     db: DbSession,
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
-    account_id: Annotated[int, Form()],
+    account_id: Annotated[int | None, Form(description="存草稿时可以不传")] = None,
     category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
@@ -257,12 +302,14 @@ def create_post(
     copy_from: Annotated[int | None, Form(description="复制这条内容的视频，不用重新上传")] = None,
     cover_url: Annotated[str, Form(description="竖封面，先传到 /api/video-covers；不传用平台自动生成的")] = "",
     options: Annotated[str, Form(description="平台专属配置 JSON，格式见 platforms/video_options.py")] = "{}",
+    draft: Annotated[bool, Form(description="存草稿：只要求标题，其余提交审核时再校验")] = False,
 ) -> PostOut:
-    """上传视频并提交审核；审核通过后手动发布到选中的账号。"""
-    if (video is None) == (copy_from is None):
+    """上传视频并提交审核（或存草稿）；审核通过后手动发布到选中的账号。"""
+    if video is not None and copy_from is not None or not draft and video is None and copy_from is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择视频")
-    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频")
-    _check_schedule(scheduled_at, account)
+    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频", draft)
+    if not draft:
+        _check_schedule(scheduled_at, account)
     post = Post(
         tenant_id=user.tenant_id,
         created_by=user.id,
@@ -273,8 +320,11 @@ def create_post(
     )
     # 先校验完再存视频，校验不过不留下孤儿文件
     _fill_video(post, user, account, title, cover_url, options)
-    post.video_path = _save_video(user, video) if video is not None else _copy_video(db, user, copy_from)
-    return _submit_for_review(db, post, account)
+    if video is not None:
+        post.video_path = _save_video(user, video)
+    else:
+        post.video_path = _copy_video(db, user, copy_from) if copy_from is not None else ""
+    return _submit_for_review(db, post, account, draft)
 
 
 @router.put("/posts/{post_id}", response_model=PostOut)
@@ -283,7 +333,7 @@ def update_post(
     db: DbSession,
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
-    account_id: Annotated[int, Form()],
+    account_id: Annotated[int | None, Form()] = None,
     category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
@@ -291,10 +341,15 @@ def update_post(
     video: Annotated[UploadFile | None, File(description="不传则沿用原视频")] = None,
     cover_url: Annotated[str, Form(description="不传则不用自定义封面")] = "",
     options: Annotated[str, Form()] = "{}",
+    draft: Annotated[bool, Form(description="只有草稿能继续存草稿")] = False,
 ) -> PostOut:
     post = _get_editable(db, user, post_id, "video")
-    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频")
-    _check_schedule(scheduled_at, account)
+    _check_draft(post, draft)
+    if not draft and video is None and not post.video_path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择视频")
+    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频", draft)
+    if not draft:
+        _check_schedule(scheduled_at, account)
     _fill_video(post, user, account, title, cover_url, options)
     if video is not None:
         _remove_video(post)
@@ -303,7 +358,7 @@ def update_post(
     post.tags = [t.lstrip("#") for t in _split(tags)]
     post.scheduled_at = scheduled_at
     post.category_id = _post_category(db, user, category_id)
-    return _submit_for_review(db, post, account)
+    return _submit_for_review(db, post, account, draft)
 
 
 @router.post("/video-covers", response_model=ImageOut, status_code=status.HTTP_201_CREATED)
@@ -357,12 +412,16 @@ def article_image(tenant_id: int, name: str) -> FileResponse:
 
 
 def _article_cover(body: ArticleIn, user: CurrentUser) -> str:
+    if not body.draft and not body.content.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请填写正文")
+    if any(m.group(1) != str(user.tenant_id) for m in ARTICLE_IMAGE_URL.finditer(body.content)):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "正文里有无法使用的图片")
+    if body.draft and not body.cover_url:
+        return ""
     # 只能引用本租户上传的图片
     cover = ARTICLE_IMAGE_URL.fullmatch(f'src="{body.cover_url}"')
     if not cover or cover.group(1) != str(user.tenant_id) or not article_image_path(*cover.groups()).is_file():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请上传封面")
-    if any(m.group(1) != str(user.tenant_id) for m in ARTICLE_IMAGE_URL.finditer(body.content)):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "正文里有无法使用的图片")
     return str(Path("article-images") / cover.group(1) / cover.group(2))
 
 
@@ -382,9 +441,10 @@ def _fill_article(post: Post, body: ArticleIn, cover_path: str) -> None:
 
 @router.post("/articles", response_model=PostOut, status_code=status.HTTP_201_CREATED)
 def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
-    """提交图文审核；审核通过后手动发布到选中的公众号，draft_only 时只存草稿箱。"""
-    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文")
-    _check_schedule(body.scheduled_at, account)
+    """提交图文审核（或存草稿）；审核通过后手动发布到选中的公众号，draft_only 时只存公众号草稿箱。"""
+    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文", body.draft)
+    if not body.draft:
+        _check_schedule(body.scheduled_at, account)
     cover_path = _article_cover(body, user)
     post = Post(
         tenant_id=user.tenant_id,
@@ -394,33 +454,59 @@ def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut
         category_id=_post_category(db, user, body.category_id),
     )
     _fill_article(post, body, cover_path)
-    return _submit_for_review(db, post, account)
+    return _submit_for_review(db, post, account, body.draft)
 
 
 @router.put("/articles/{post_id}", response_model=PostOut)
 def update_article(post_id: int, body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
     post = _get_editable(db, user, post_id, "article")
-    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文")
-    _check_schedule(body.scheduled_at, account)
+    _check_draft(post, body.draft)
+    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文", body.draft)
+    if not body.draft:
+        _check_schedule(body.scheduled_at, account)
     _fill_article(post, body, _article_cover(body, user))
     post.category_id = _post_category(db, user, body.category_id)
-    return _submit_for_review(db, post, account)
+    return _submit_for_review(db, post, account, body.draft)
+
+
+# 内容列表的分组：草稿、待审核、已退回看审核状态；后面几个看这一轮的发布状态
+ListStatus = Literal["draft", "pending", "rejected", "to_publish", "publishing", "scheduled", "published", "failed"]
 
 
 @router.get("/posts", response_model=list[PostOut])
 def list_posts(
     db: DbSession,
     user: CurrentUser,
-    review_status: ReviewStatus | None = None,
+    status_: Annotated[ListStatus | None, Query(alias="status")] = None,
     category_id: int | None = None,
     uncategorized: bool = False,
     mine: bool = False,
     limit: int = 100,
 ) -> list[PostOut]:
-    """category_id 包含下级分类；uncategorized 只看未分类；mine 只看自己提交的。"""
-    query = select(Post).where(Post.tenant_id == user.tenant_id)
-    if review_status:
-        query = query.where(Post.review_status == review_status)
+    """status 按「要谁处理」分组，见 ListStatus；category_id 包含下级分类；uncategorized 只看未分类；mine 只看自己提交的。"""
+    task = PublishTask
+    now = datetime.now(UTC)
+    query = (
+        select(Post)
+        .outerjoin(task, Post.current_task_id == task.id)
+        .where(Post.tenant_id == user.tenant_id, or_(Post.review_status != ReviewStatus.draft, Post.created_by == user.id))
+    )
+    if status_ in ("draft", "pending", "rejected"):
+        query = query.where(Post.review_status == status_)
+    elif status_ == "to_publish":
+        query = query.where(Post.review_status == ReviewStatus.approved, Post.current_task_id.is_(None))
+    elif status_ == "publishing":
+        query = query.where(task.status.in_([PublishStatus.queued, PublishStatus.running]))
+    elif status_ == "scheduled":
+        query = query.where(
+            or_(task.status == PublishStatus.scheduled, and_(task.status == PublishStatus.success, Post.scheduled_at > now))
+        )
+    elif status_ == "published":
+        query = query.where(
+            task.status == PublishStatus.success, or_(Post.scheduled_at.is_(None), Post.scheduled_at <= now)
+        )
+    elif status_ == "failed":
+        query = query.where(task.status == PublishStatus.failed)
     if category_id is not None:
         query = query.where(Post.category_id.in_(subtree_ids(db, user, category_id)))
     elif uncategorized:
@@ -429,7 +515,11 @@ def list_posts(
         query = query.where(Post.created_by == user.id)
     rows = db.scalars(
         query.options(
-            selectinload(Post.article), selectinload(Post.account), selectinload(Post.creator), selectinload(Post.reviewer)
+            selectinload(Post.article),
+            selectinload(Post.account),
+            selectinload(Post.creator),
+            selectinload(Post.reviewer),
+            selectinload(Post.current_task).selectinload(PublishTask.result),
         )
         .order_by(Post.id.desc())
         .limit(min(limit, 500))
@@ -443,7 +533,11 @@ def move_category(body: MoveCategoryIn, db: DbSession, user: CurrentUser) -> int
     category_id = _post_category(db, user, body.category_id)
     moved = db.execute(
         update(Post)
-        .where(Post.tenant_id == user.tenant_id, Post.id.in_(body.post_ids))
+        .where(
+            Post.tenant_id == user.tenant_id,
+            Post.id.in_(body.post_ids),
+            or_(Post.review_status != ReviewStatus.draft, Post.created_by == user.id),
+        )
         # 列表里的「提交时间」用的是 updated_at，移动分类不算修改内容
         .values(category_id=category_id, updated_at=Post.updated_at)
     ).rowcount
@@ -502,27 +596,24 @@ def reject_post(post_id: int, body: RejectIn, db: DbSession, user: CurrentUser) 
 @router.post("/posts/{post_id}/publish", response_model=PublishTaskOut)
 def publish_post(post_id: int, body: PublishIn, db: DbSession, user: CurrentUser) -> PublishTaskOut:
     """审核通过的内容生成发布任务。账号和定时在这里重新校验：审核期间可能已失效或过期。"""
-    post = _get_post(db, user, post_id)
+    # 锁住内容，重复点击时第二次能看到已经有发布任务
+    post = _get_post(db, user, post_id, lock=True)
     if post.review_status != ReviewStatus.approved:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "只有审核通过的内容可以发布")
+    if post.current_task_id is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "这条内容已经发布过了")
     if post.article:
         account = _publish_account(db, user, post.account_id, tasks.ARTICLE_PLATFORMS, "图文")
     else:
         account = _publish_account(db, user, post.account_id, tasks.VIDEO_PLATFORMS, "视频")
     _check_schedule(body.scheduled_at, account)
-    _transition(
-        db, post, ReviewStatus.approved, "这条内容已经发布过了",
-        review_status=ReviewStatus.published, scheduled_at=body.scheduled_at,
-    )
-    db.refresh(post)
+    post.scheduled_at = body.scheduled_at
     return _create_task(db, user, post, account)
 
 
 @router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_post(post_id: int, db: DbSession, user: CurrentUser) -> None:
-    post = _get_post(db, user, post_id, lock=True)
-    if post.review_status == ReviewStatus.published:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已发布的内容不能删除")
+    post = _get_editable(db, user, post_id)
     db.delete(post)
     db.commit()
     _remove_video(post)
@@ -550,12 +641,20 @@ def _get_task(db: DbSession, user: CurrentUser, task_id: int) -> PublishTask:
 @router.post("/publish-tasks/{task_id}/retry", response_model=PublishTaskOut)
 def retry_task(task_id: int, db: DbSession, user: CurrentUser) -> PublishTaskOut:
     task = _get_task(db, user, task_id)
-    if task.status != PublishStatus.failed:
+    # 和修改内容互斥：修改时也锁这一行，改完 current_task 就不再是这个任务
+    post = db.get(Post, task.post_id, with_for_update=True)
+    if post.current_task_id != task.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "内容已修改，请重新审核后再发布")
+    claimed = db.execute(
+        update(PublishTask)
+        .where(PublishTask.id == task.id, PublishTask.status == PublishStatus.failed)
+        .values(status=PublishStatus.queued, error=None, finished_at=None)
+    ).rowcount
+    if not claimed:
+        db.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "只有失败的任务可以重试")
-    task.status = PublishStatus.queued
-    task.error = None
-    task.finished_at = None
     db.commit()
+    db.refresh(task)
     tasks.enqueue_publish(task)
     return _task_out(task)
 

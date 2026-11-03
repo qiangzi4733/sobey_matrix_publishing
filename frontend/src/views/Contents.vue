@@ -19,9 +19,14 @@
       <div class="toolbar">
         <span class="filters">
           <el-radio-group v-model="filter" @change="load">
+            <el-radio-button value="draft">草稿</el-radio-button>
             <el-radio-button value="pending">待审核</el-radio-button>
-            <el-radio-button value="approved">待发布</el-radio-button>
             <el-radio-button value="rejected">已退回</el-radio-button>
+            <el-radio-button value="to_publish">待发布</el-radio-button>
+            <el-radio-button value="publishing">发布中</el-radio-button>
+            <el-radio-button value="scheduled">已定时</el-radio-button>
+            <el-radio-button value="published">已发布</el-radio-button>
+            <el-radio-button value="failed">发布失败</el-radio-button>
             <el-radio-button value="">全部</el-radio-button>
           </el-radio-group>
           <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
@@ -34,55 +39,60 @@
       </div>
       <el-table :data="posts" empty-text="没有内容" @selection-change="(rows) => (selected = rows)">
         <el-table-column type="selection" width="40" />
-        <el-table-column label="标题" min-width="180" show-overflow-tooltip>
+        <el-table-column label="标题" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-link type="primary" @click="openDetail(row)">{{ row.title }}</el-link>
+            <el-tag size="small" type="info" class="kind">{{ row.kind === 'article' ? '图文' : '视频' }}</el-tag>
+            <!-- el-link 是 inline-flex，标题过长时整个被截掉，所以用普通文字 -->
+            <span class="title-link" @click="openDetail(row)">{{ row.title }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="70">
-          <template #default="{ row }">{{ row.kind === 'article' ? '图文' : '视频' }}</template>
-        </el-table-column>
-        <el-table-column label="分类" min-width="120" show-overflow-tooltip>
+        <el-table-column label="分类" min-width="80" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.category_id">{{ categoryPath(categories, row.category_id) }}</span>
             <span v-else class="tip">未分类</span>
           </template>
         </el-table-column>
-        <el-table-column label="发布账号" min-width="160">
+        <el-table-column label="发布账号" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
-            <template v-if="row.account">{{ PLATFORMS[row.account.platform] }} · {{ row.account.display_name }}</template>
-            <span v-else-if="row.review_status !== 'published'" class="warn">账号已移除，请修改</span>
+            <template v-if="row.account"><PlatformIcon :platform="row.account.platform" /> {{ row.account.display_name }}</template>
+            <span v-else-if="row.account_name" class="tip">{{ row.account_name }}（已移除）</span>
+            <span v-else-if="row.review_status === 'draft'" class="tip">未选择</span>
+            <span v-else class="warn">账号已移除，请修改</span>
           </template>
         </el-table-column>
-        <el-table-column label="定时" width="170">
+        <el-table-column label="定时" width="145">
           <template #default="{ row }">{{ row.scheduled_at ? formatTime(row.scheduled_at) : '立即' }}</template>
         </el-table-column>
-        <el-table-column label="提交" width="170">
+        <el-table-column label="提交" width="145">
           <template #default="{ row }">
             <div>{{ row.creator_name || '-' }}</div>
             <div class="tip">{{ formatTime(row.updated_at) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="审核" width="90">
           <template #default="{ row }">
-            <el-tag :type="REVIEW_STATUS[row.review_status].type">{{ REVIEW_STATUS[row.review_status].label }}</el-tag>
+            <!-- 退回原因放在悬停提示里，省一列 -->
+            <el-tooltip :disabled="!row.review_note" :content="`退回原因：${row.review_note}`" placement="top">
+              <el-tag :type="REVIEW_STATUS[row.review_status].type">{{ REVIEW_STATUS[row.review_status].label }}</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="审核意见" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.review_note || '' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="230">
+        <el-table-column label="发布" width="100">
           <template #default="{ row }">
-            <template v-if="row.review_status === 'pending'">
-              <el-button link type="success" @click="approve(row)">通过</el-button>
-              <el-button link type="warning" @click="openReject(row)">退回</el-button>
-            </template>
-            <el-button v-if="row.review_status === 'approved'" link type="primary" @click="openPublish(row)">发布</el-button>
-            <template v-if="row.review_status !== 'published'">
+            <el-tag v-if="row.publish_status" :type="PUBLISH_STATUS[row.publish_status].type">{{ PUBLISH_STATUS[row.publish_status].label }}</el-tag>
+            <el-tag v-else-if="row.review_status === 'approved'" type="info">未发布</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="170" fixed="right">
+          <template #default="{ row }">
+            <!-- 审核要先看内容，在详情里通过或退回 -->
+            <el-button v-if="row.review_status === 'pending'" link type="success" @click="openDetail(row)">审核</el-button>
+            <el-button v-if="row.review_status === 'approved' && !row.publish_status" link type="primary" @click="openPublish(row)">发布</el-button>
+            <el-button v-if="row.publish_status" link type="primary" @click="$router.push({ name: 'tasks' })">发布记录</el-button>
+            <template v-if="isEditable(row)">
               <el-button link type="primary" @click="edit(row)">修改</el-button>
               <el-button link type="danger" @click="remove(row)">删除</el-button>
             </template>
-            <el-button v-else link type="primary" @click="$router.push({ name: 'tasks' })">发布记录</el-button>
             <el-button link type="primary" @click="copy(row)">复制</el-button>
           </template>
         </el-table-column>
@@ -92,14 +102,17 @@
     <el-drawer v-model="detailVisible" :title="detail?.title" size="50%">
       <template v-if="detail">
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="状态">{{ REVIEW_STATUS[detail.review_status].label }}</el-descriptions-item>
+          <el-descriptions-item label="审核状态">{{ REVIEW_STATUS[detail.review_status].label }}</el-descriptions-item>
+          <el-descriptions-item label="发布状态">
+            {{ detail.publish_status ? PUBLISH_STATUS[detail.publish_status].label : detail.review_status === 'approved' ? '未发布' : '-' }}
+          </el-descriptions-item>
           <el-descriptions-item v-if="detail.review_note" label="审核意见">{{ detail.review_note }}</el-descriptions-item>
           <el-descriptions-item label="发布账号">
-            <template v-if="detail.account">
+            <template v-if="!detail.account">{{ detail.account_name ? `${detail.account_name}（已移除）` : '-' }}</template>
+            <template v-else>
               {{ PLATFORMS[detail.account.platform] }} · {{ detail.account.display_name }}
               <span v-if="detail.account.status !== 'active'" class="warn">（登录已失效）</span>
             </template>
-            <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="分类">{{ categoryPath(categories, detail.category_id) || '未分类' }}</el-descriptions-item>
           <el-descriptions-item label="定时">{{ detail.scheduled_at ? formatTime(detail.scheduled_at) : '立即' }}</el-descriptions-item>
@@ -133,7 +146,8 @@
           <el-button type="warning" @click="openReject(detail)">退回</el-button>
         </div>
         <div class="actions">
-          <el-button v-if="detail.review_status === 'approved'" type="primary" @click="openPublish(detail)">发布</el-button>
+          <el-button v-if="detail.review_status === 'approved' && !detail.publish_status" type="primary" @click="openPublish(detail)">发布</el-button>
+          <el-button v-if="isEditable(detail)" @click="edit(detail)">修改</el-button>
           <el-button @click="copy(detail)">复制到其他账号</el-button>
         </div>
       </template>
@@ -219,10 +233,11 @@ import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
 import CategoryManager from '../components/CategoryManager.vue'
 import CategorySelect from '../components/CategorySelect.vue'
+import PlatformIcon from '../components/PlatformIcon.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryPath } from '../categories'
 import { cleanHtml } from '../html'
-import { PLATFORMS, REVIEW_STATUS, VIDEO_OPTION_LABELS, formatTime } from '../platforms'
+import { PLATFORMS, PUBLISH_STATUS, REVIEW_STATUS, VIDEO_OPTION_LABELS, formatTime, isEditable } from '../platforms'
 
 const route = useRoute()
 const router = useRouter()
@@ -264,7 +279,7 @@ const defaultCategory = computed(() => (typeof category.value === 'number' ? cat
 
 async function load() {
   const params = {}
-  if (filter.value) params.review_status = filter.value
+  if (filter.value) params.status = filter.value
   if (category.value === 'none') params.uncategorized = true
   else if (category.value !== 'all') params.category_id = category.value
   if (mine.value) params.mine = true
@@ -371,7 +386,15 @@ function openForm(kind, postId = null, copyFrom = null) {
   else videoFormVisible.value = true
 }
 
-function edit(row) {
+async function edit(row) {
+  if (row.publish_status === 'failed') {
+    // 有些失败发生在点了平台的发布按钮之后，作品可能其实已经发出去了
+    await ElMessageBox.confirm(
+      '上次发布失败。修改前请先到平台后台确认作品没有发出去，以免重复发布。修改后需要重新审核、重新发布。',
+      '修改发布失败的内容',
+      { type: 'warning', confirmButtonText: '继续修改' },
+    )
+  }
   detailVisible.value = false
   openForm(row.kind, row.id)
 }
@@ -407,11 +430,11 @@ function closeForm() {
   })
 }
 
-async function formSaved() {
+async function formSaved(draft) {
   videoFormVisible.value = false
   articleFormVisible.value = false
-  // 新提交和修改后的内容都在「待审核」
-  filter.value = 'pending'
+  // 跳到刚保存的内容所在的分组
+  filter.value = draft ? 'draft' : 'pending'
   await load()
 }
 
@@ -483,6 +506,16 @@ onMounted(async () => {
   max-height: 480px;
   margin-top: 16px;
   background: #000;
+}
+.kind {
+  margin-right: 6px;
+}
+.title-link {
+  color: var(--el-color-primary);
+  cursor: pointer;
+}
+.title-link:hover {
+  text-decoration: underline;
 }
 .video-cover {
   display: block;

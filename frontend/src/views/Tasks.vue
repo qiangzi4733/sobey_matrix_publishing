@@ -32,7 +32,9 @@
           <el-link v-if="row.url" :href="row.url" target="_blank" type="primary" class="op">查看文章</el-link>
           <el-button v-if="row.needs_code" link type="warning" @click="openVerify(row)">输入验证码</el-button>
           <el-button v-if="row.has_screenshot" link type="primary" @click="showScreenshot(row)">截图</el-button>
-          <el-button v-if="row.status === 'failed'" link type="primary" @click="retry(row)">重试</el-button>
+          <el-button v-if="row.can_retry" link type="primary" @click="retry(row)">重试</el-button>
+          <!-- 内容在失败后修改过，要重新审核、发布，旧记录不能再重试 -->
+          <span v-else-if="row.status === 'failed'" class="tip">内容已修改</span>
         </template>
       </el-table-column>
     </el-table>

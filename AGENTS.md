@@ -50,7 +50,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 关键文件：
 
-- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status` 和提交时选的 `account_id`，账号被移除后为空、要修改时重新选）/ `PublishTask`（每条内容一条，**点「发布」时才生成**；引入单账号前发布的旧内容可能有多条）/ `Category`（内容分类，租户内一棵树，`Post.category_id` 为空是未分类）。
+- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status`、提交时选的 `account_id`（账号被移除后为空、要修改时重新选）和这一轮的发布任务 `current_task_id`）/ `PublishTask`（**点「发布」时才生成**；发布失败后修改再发布会有多条，旧的留作发布记录；引入单账号前的旧内容也可能有多条）/ `Category`（内容分类，租户内一棵树，`Post.category_id` 为空是未分类）。
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
 - `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`video_options.py` 定义发布视频时各平台的标题字数上限和**专属配置**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
@@ -77,7 +77,14 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
   - 页面选择器写明实测日期，平台改版时最先坏的就是这里。
 - **数据库用 Alembic 迁移**（2026-11-03 引入）：配置和迁移文件在 `backend/app/alembic.ini`、`backend/app/migrations/`（放在 app 里是因为开发环境只挂载了 app 目录）。backend 启动时由 `app.migrate.upgrade()` 升级到最新版本；引入前用 `create_all` 建的库会先自动标记为 `0001`。改模型后在 backend 容器里生成迁移并检查内容：`alembic -c app/alembic.ini revision --autogenerate -m "说明"`，再用 `alembic -c app/alembic.ini check` 确认模型和库一致。不要手改生产库。
 - 非原生枚举字段（`Enum(..., native_enum=False)`）的列宽按建表时最长的取值确定，以后要加更长的取值时先写迁移改列宽；新枚举字段直接写明 `length`。
-- **内容审核**：提交（视频/图文）后状态为「待审核」，不生成发布任务；「通过」后为「待发布」，需要人手动点「发布」才生成 `PublishTask`（之后的排队、定时、重试不变）；「退回」需填原因，退回/待审核/待发布的内容都可以修改，修改后回到待审核；已发布的不能修改、删除。状态变更都按当前状态条件 `UPDATE`，重复点击只生效一次。点「发布」时**重新校验账号状态和定时范围**（审核期间可能过期），发布时可以改定时。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。旧数据迁移时都标为「已发布」。
+- **审核状态和发布状态分开**（2026-11-03，用户确认）：
+  - 审核状态 `review_status`：草稿 / 待审核 / 已退回 / 已通过。**草稿只有提交人自己看得到**（列表、详情、审核、移动分类都按 `created_by` 过滤，别人访问返回 404），存草稿只要求标题，账号、视频、封面、正文等在提交审核时才校验；已提交的内容不能再存为草稿。
+  - 发布状态不单独存，由 `Post.current_task` 算出（`posts._publish_status`）：没有任务为「未发布」，排队/执行中为「发布中」，我们自己等定时（`scheduled`）或平台原生定时已提交但还没到点为「已定时」，成功为「发布成功」（公众号只存草稿时为「已存草稿」），失败为「发布失败」。「发布成功」只表示提交给了平台，不代表平台审核通过（还没接）。
+  - 审核通过后人手动点「发布」才生成 `PublishTask`（之后的排队、定时、重试不变）；点「发布」时锁住内容行，**重新校验账号状态和定时范围**（审核期间可能过期），可以改定时。
+  - **没点过发布、或这一轮发布失败的内容可以修改、删除**，其他（发布中、已定时、已发布）不能。发布失败后修改会清空 `current_task`、回到待审核，旧任务留在发布记录里但不能再重试（`can_retry`，重试和修改都锁内容行，互斥）。前端修改失败内容前提醒客户先去平台确认没有发出去（有些失败发生在点了平台发布按钮之后）。
+  - 审核状态变更按当前状态条件 `UPDATE`，重复点击只生效一次。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。
+  - 内容列表按「要谁处理」分页签：草稿、待审核、已退回、待发布、发布中、已定时、已发布、发布失败、全部（后端 `GET /api/posts?status=`）。列表里审核要点进详情（先看内容再通过/退回）。
+  - 迁移 0006：旧的「已发布」改为「已通过」+ `current_task_id` 指向最新任务，旧内容的 `account_id` 从发布任务补上；账号已移除的显示任务里记下的 `account_name`。
 - **视频表单 = 通用字段 + 平台专属配置**（2026-11-03，用户确认）：视频、竖封面（3:4，可不传）、标题、描述、话题、分类、定时是通用字段，存在 `Post` 上；只有某个平台才有的选项存 `Post.options`（JSON），每个平台一个 pydantic 模型（`video_options.py`，`extra="forbid"`），提交时按所选账号的平台校验，标题字数上限也按平台。图片字段接口里传 `/api/video-covers/...` 地址、库里存相对 media_dir 的路径。前端先选账号（按平台分组），下面的字数、定时提示跟着平台变，专属配置组件放 `components/video-options/`、登记在 `VideoForm.vue` 的 `OPTION_FORMS`；换成其他平台的账号时确认后清空专属配置。复制到同平台账号时沿用配置。视频封面和图文图片一样不随内容删除（复制出来的内容共用）。加新选项：后端模型 + 前端组件 + `platforms.js` 的 `VIDEO_OPTION_LABELS`（详情页显示名）+ 平台模块读取。
 - **前端入口是「内容管理」页**（`views/Contents.vue`）：列表里完成新建、修改、审核、发布、删除。发布视频用弹窗、发布图文用宽抽屉（表单组件 `components/VideoForm.vue` / `ArticleForm.vue`）；有未提交的改动时关闭要确认，提交中不能关。旧地址 `/publish`、`/publish-article`、`/review` 都重定向到这里。
 - **内容分类**（2026-11-03）：租户内多级分类，最多 3 层（后端 `routers/categories.py` 的 `MAX_DEPTH` 和前端 `src/categories.js` 要一致），一条内容一个分类、可以不选。按分类筛选时包含下级分类；有下级分类或内容的分类不能删除（不自动改成未分类）。分类只是归档：任何状态的内容（包括已发布）都能批量「移到分类」，不需要重新审核、不改 `updated_at`。内容管理页左侧是分类树，另有「只看我提交的」筛选。以后做权限时按分类给用户分配可管理范围（用户已确认）。
