@@ -3,14 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.db import Base, engine
+from app.migrate import upgrade
 from app.routers import accounts, auth, posts, wechat_mp
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # 骨架阶段直接建表；模型稳定后改用 Alembic 迁移
-    Base.metadata.create_all(engine)
+    upgrade()
     yield
 
 

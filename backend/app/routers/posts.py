@@ -6,16 +6,28 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app import tasks, verification
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
-from app.models import Account, AccountStatus, Article, Platform, Post, PublishStatus, PublishTask
+from app.models import Account, AccountStatus, Article, Platform, Post, PublishStatus, PublishTask, ReviewStatus
 from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
 from app.platforms.wechat_mp import ARTICLE_IMAGE_URL, article_image_path
-from app.schemas import ArticleIn, CodeIn, ImageOut, PublishTaskOut, VerificationOut
+from app.schemas import (
+    ArticleIn,
+    CodeIn,
+    ImageOut,
+    PostAccountOut,
+    PostDetailOut,
+    PostOut,
+    PublishIn,
+    PublishTaskOut,
+    RejectIn,
+    VerificationOut,
+)
+from app.security import create_video_token, verify_video_token
 
 router = APIRouter(prefix="/api", tags=["publish"])
 
@@ -51,9 +63,11 @@ def _task_out(task: PublishTask) -> PublishTaskOut:
 
 
 def _publish_accounts(db: DbSession, user: CurrentUser, ids: set[int], allowed: set[Platform], kind: str) -> list[Account]:
-    accounts = db.scalars(select(Account).where(Account.id.in_(ids), Account.tenant_id == user.tenant_id)).all()
-    if not ids or len(accounts) != len(ids):
+    if not ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择要发布的账号")
+    accounts = db.scalars(select(Account).where(Account.id.in_(ids), Account.tenant_id == user.tenant_id)).all()
+    if len(accounts) != len(ids):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "选择的账号不存在或已被移除，请重新选择")
     for account in accounts:
         if account.platform not in allowed:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{account.display_name}」所在平台暂不支持发布{kind}")
@@ -76,7 +90,7 @@ def _check_schedule(scheduled_at: datetime | None, accounts: list[Account]) -> N
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
 
 
-def _submit(db: DbSession, user: CurrentUser, post: Post, accounts: list[Account]) -> list[PublishTaskOut]:
+def _create_tasks(db: DbSession, user: CurrentUser, post: Post, accounts: list[Account]) -> list[PublishTaskOut]:
     def initial_status(account: Account) -> PublishStatus:
         # 平台自带定时的现在就提交给平台；其余由 beat 到点再入队
         if post.scheduled_at and account.platform not in NATIVE_SCHEDULE:
@@ -102,7 +116,97 @@ def _submit(db: DbSession, user: CurrentUser, post: Post, accounts: list[Account
     return [_task_out(task) for task in post.tasks]
 
 
-@router.post("/posts", response_model=list[PublishTaskOut], status_code=status.HTTP_201_CREATED)
+def _tenant_accounts(db: DbSession, tenant_id: int) -> dict[int, Account]:
+    return {a.id: a for a in db.scalars(select(Account).where(Account.tenant_id == tenant_id))}
+
+
+def _post_out(db: DbSession, post: Post, detail: bool = False, accounts_by_id: dict[int, Account] | None = None) -> PostOut:
+    if accounts_by_id is None:
+        accounts_by_id = _tenant_accounts(db, post.tenant_id)
+    accounts = [accounts_by_id[i] for i in post.account_ids if i in accounts_by_id]
+    fields = dict(
+        id=post.id,
+        kind="article" if post.article else "video",
+        title=post.title,
+        review_status=post.review_status,
+        review_note=post.review_note,
+        reviewer_name=post.reviewer.name if post.reviewer else None,
+        reviewed_at=post.reviewed_at,
+        creator_name=post.creator.name if post.creator else None,
+        accounts=[PostAccountOut.model_validate(a) for a in accounts],
+        scheduled_at=post.scheduled_at,
+        created_at=post.created_at,
+        updated_at=post.updated_at,
+    )
+    if not detail:
+        return PostOut(**fields)
+    out = PostDetailOut(**fields, description=post.description, tags=post.tags)
+    if post.article:
+        out.author = post.article.author
+        out.content = post.article.content
+        out.cover_url = f"/api/{post.article.cover_path}"
+        out.source_url = post.article.source_url
+        out.open_comment = post.article.open_comment
+        out.draft_only = post.article.draft_only
+    else:
+        out.video_url = f"/api/posts/{post.id}/video?token={create_video_token(post.id)}"
+    return out
+
+
+def _get_post(db: DbSession, user: CurrentUser, post_id: int, lock: bool = False) -> Post:
+    # 修改、删除时锁住这一行，避免和同时进行的发布交错
+    post = db.get(Post, post_id, with_for_update=lock)
+    if post is None or post.tenant_id != user.tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "内容不存在")
+    return post
+
+
+def _get_editable(db: DbSession, user: CurrentUser, post_id: int, kind: str) -> Post:
+    post = _get_post(db, user, post_id, lock=True)
+    if (post.article is not None) != (kind == "article"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "内容不存在")
+    if post.review_status == ReviewStatus.published:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已发布的内容不能修改")
+    return post
+
+
+def _submit_for_review(db: DbSession, post: Post, accounts: list[Account]) -> PostOut:
+    """新建或修改后都回到待审核，上一轮的审核结果清空。"""
+    post.account_ids = sorted(a.id for a in accounts)
+    post.review_status = ReviewStatus.pending
+    post.review_note = None
+    post.reviewed_by = None
+    post.reviewed_at = None
+    db.add(post)
+    db.commit()
+    return _post_out(db, post)
+
+
+def _parse_ids(account_ids: str) -> set[int]:
+    try:
+        return {int(i) for i in _split(account_ids)}
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "账号参数不正确") from None
+
+
+def _save_video(user: CurrentUser, video: UploadFile) -> str:
+    suffix = Path(video.filename or "").suffix.lower()
+    if suffix not in VIDEO_SUFFIXES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持 mp4 / mov 视频")
+    relative = Path(str(user.tenant_id)) / f"{uuid.uuid4().hex}{suffix}"
+    target = Path(get_settings().media_dir) / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as out:
+        shutil.copyfileobj(video.file, out, length=1024 * 1024)
+    return str(relative)
+
+
+def _remove_video(post: Post) -> None:
+    if post.video_path:
+        (Path(get_settings().media_dir) / post.video_path).unlink(missing_ok=True)
+
+
+@router.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
 def create_post(
     db: DbSession,
     user: CurrentUser,
@@ -112,35 +216,45 @@ def create_post(
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
-) -> list[PublishTaskOut]:
-    """上传视频并发布到选中的多个账号，每个账号生成一条发布任务。"""
-    suffix = Path(video.filename or "").suffix.lower()
-    if suffix not in VIDEO_SUFFIXES:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持 mp4 / mov 视频")
-
-    try:
-        ids = {int(i) for i in _split(account_ids)}
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "账号参数不正确") from None
-    accounts = _publish_accounts(db, user, ids, tasks.VIDEO_PLATFORMS, "视频")
+) -> PostOut:
+    """上传视频并提交审核；审核通过后手动发布到选中的账号。"""
+    accounts = _publish_accounts(db, user, _parse_ids(account_ids), tasks.VIDEO_PLATFORMS, "视频")
     _check_schedule(scheduled_at, accounts)
-
-    relative = Path(str(user.tenant_id)) / f"{uuid.uuid4().hex}{suffix}"
-    target = Path(get_settings().media_dir) / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as out:
-        shutil.copyfileobj(video.file, out, length=1024 * 1024)
-
     post = Post(
         tenant_id=user.tenant_id,
         created_by=user.id,
         title=title,
         description=description,
         tags=[t.lstrip("#") for t in _split(tags)],
-        video_path=str(relative),
+        video_path=_save_video(user, video),
         scheduled_at=scheduled_at,
     )
-    return _submit(db, user, post, accounts)
+    return _submit_for_review(db, post, accounts)
+
+
+@router.put("/posts/{post_id}", response_model=PostOut)
+def update_post(
+    post_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    title: Annotated[str, Form(min_length=1, max_length=200)],
+    account_ids: Annotated[str, Form(description="逗号分隔的账号 ID")],
+    description: Annotated[str, Form(max_length=1000)] = "",
+    tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
+    scheduled_at: Annotated[datetime | None, Form()] = None,
+    video: Annotated[UploadFile | None, File(description="不传则沿用原视频")] = None,
+) -> PostOut:
+    post = _get_editable(db, user, post_id, "video")
+    accounts = _publish_accounts(db, user, _parse_ids(account_ids), tasks.VIDEO_PLATFORMS, "视频")
+    _check_schedule(scheduled_at, accounts)
+    if video is not None:
+        _remove_video(post)
+        post.video_path = _save_video(user, video)
+    post.title = title
+    post.description = description
+    post.tags = [t.lstrip("#") for t in _split(tags)]
+    post.scheduled_at = scheduled_at
+    return _submit_for_review(db, post, accounts)
 
 
 @router.post("/article-images", response_model=ImageOut, status_code=status.HTTP_201_CREATED)
@@ -168,37 +282,141 @@ def article_image(tenant_id: int, name: str) -> FileResponse:
     return FileResponse(path)
 
 
-@router.post("/articles", response_model=list[PublishTaskOut], status_code=status.HTTP_201_CREATED)
-def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> list[PublishTaskOut]:
-    """发布图文到选中的公众号；draft_only 时只存草稿箱。"""
-    accounts = _publish_accounts(db, user, set(body.account_ids), tasks.ARTICLE_PLATFORMS, "图文")
-    _check_schedule(body.scheduled_at, accounts)
-
+def _article_cover(body: ArticleIn, user: CurrentUser) -> str:
     # 只能引用本租户上传的图片
     cover = ARTICLE_IMAGE_URL.fullmatch(f'src="{body.cover_url}"')
     if not cover or cover.group(1) != str(user.tenant_id) or not article_image_path(*cover.groups()).is_file():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请上传封面")
     if any(m.group(1) != str(user.tenant_id) for m in ARTICLE_IMAGE_URL.finditer(body.content)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "正文里有无法使用的图片")
+    return str(Path("article-images") / cover.group(1) / cover.group(2))
 
-    post = Post(
-        tenant_id=user.tenant_id,
-        created_by=user.id,
-        title=body.title,
-        description=body.digest,
-        tags=[],
-        video_path="",
-        scheduled_at=body.scheduled_at,
+
+def _fill_article(post: Post, body: ArticleIn, cover_path: str) -> None:
+    post.title = body.title
+    post.description = body.digest
+    post.scheduled_at = body.scheduled_at
+    if post.article is None:
+        post.article = Article()
+    post.article.author = body.author
+    post.article.content = body.content
+    post.article.cover_path = cover_path
+    post.article.source_url = body.source_url
+    post.article.open_comment = body.open_comment
+    post.article.draft_only = body.draft_only
+
+
+@router.post("/articles", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
+    """提交图文审核；审核通过后手动发布到选中的公众号，draft_only 时只存草稿箱。"""
+    accounts = _publish_accounts(db, user, set(body.account_ids), tasks.ARTICLE_PLATFORMS, "图文")
+    _check_schedule(body.scheduled_at, accounts)
+    cover_path = _article_cover(body, user)
+    post = Post(tenant_id=user.tenant_id, created_by=user.id, tags=[], video_path="")
+    _fill_article(post, body, cover_path)
+    return _submit_for_review(db, post, accounts)
+
+
+@router.put("/articles/{post_id}", response_model=PostOut)
+def update_article(post_id: int, body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
+    post = _get_editable(db, user, post_id, "article")
+    accounts = _publish_accounts(db, user, set(body.account_ids), tasks.ARTICLE_PLATFORMS, "图文")
+    _check_schedule(body.scheduled_at, accounts)
+    _fill_article(post, body, _article_cover(body, user))
+    return _submit_for_review(db, post, accounts)
+
+
+@router.get("/posts", response_model=list[PostOut])
+def list_posts(
+    db: DbSession, user: CurrentUser, review_status: ReviewStatus | None = None, limit: int = 100
+) -> list[PostOut]:
+    query = select(Post).where(Post.tenant_id == user.tenant_id)
+    if review_status:
+        query = query.where(Post.review_status == review_status)
+    rows = db.scalars(
+        query.options(selectinload(Post.article), selectinload(Post.creator), selectinload(Post.reviewer))
+        .order_by(Post.id.desc())
+        .limit(min(limit, 500))
+    ).all()
+    accounts_by_id = _tenant_accounts(db, user.tenant_id)
+    return [_post_out(db, post, accounts_by_id=accounts_by_id) for post in rows]
+
+
+@router.get("/posts/{post_id}", response_model=PostDetailOut)
+def get_post(post_id: int, db: DbSession, user: CurrentUser) -> PostDetailOut:
+    return _post_out(db, _get_post(db, user, post_id), detail=True)
+
+
+# 不用登录令牌，用 create_video_token 签的预览令牌，见 app.security
+@router.get("/posts/{post_id}/video")
+def post_video(post_id: int, token: str, db: DbSession) -> FileResponse:
+    post = db.get(Post, post_id)
+    if post is None or not post.video_path or not verify_video_token(token, post_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "视频不存在")
+    return FileResponse(Path(get_settings().media_dir) / post.video_path)
+
+
+def _transition(db: DbSession, post: Post, before: ReviewStatus, error: str, **values) -> None:
+    """按当前状态条件更新，重复点击或并发操作只有一次生效。"""
+    changed = db.execute(
+        update(Post).where(Post.id == post.id, Post.review_status == before).values(**values)
+    ).rowcount
+    if not changed:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, error)
+
+
+@router.post("/posts/{post_id}/approve", response_model=PostOut)
+def approve_post(post_id: int, db: DbSession, user: CurrentUser) -> PostOut:
+    post = _get_post(db, user, post_id)
+    _transition(
+        db, post, ReviewStatus.pending, "只有待审核的内容可以审核",
+        review_status=ReviewStatus.approved, review_note=None, reviewed_by=user.id, reviewed_at=datetime.now(UTC),
     )
-    post.article = Article(
-        author=body.author,
-        content=body.content,
-        cover_path=str(Path("article-images") / cover.group(1) / cover.group(2)),
-        source_url=body.source_url,
-        open_comment=body.open_comment,
-        draft_only=body.draft_only,
+    db.commit()
+    db.refresh(post)
+    return _post_out(db, post)
+
+
+@router.post("/posts/{post_id}/reject", response_model=PostOut)
+def reject_post(post_id: int, body: RejectIn, db: DbSession, user: CurrentUser) -> PostOut:
+    post = _get_post(db, user, post_id)
+    _transition(
+        db, post, ReviewStatus.pending, "只有待审核的内容可以退回",
+        review_status=ReviewStatus.rejected, review_note=body.note, reviewed_by=user.id, reviewed_at=datetime.now(UTC),
     )
-    return _submit(db, user, post, accounts)
+    db.commit()
+    db.refresh(post)
+    return _post_out(db, post)
+
+
+@router.post("/posts/{post_id}/publish", response_model=list[PublishTaskOut])
+def publish_post(post_id: int, body: PublishIn, db: DbSession, user: CurrentUser) -> list[PublishTaskOut]:
+    """审核通过的内容按账号生成发布任务。账号和定时在这里重新校验：审核期间可能已失效或过期。"""
+    post = _get_post(db, user, post_id)
+    if post.review_status != ReviewStatus.approved:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只有审核通过的内容可以发布")
+    if post.article:
+        accounts = _publish_accounts(db, user, set(post.account_ids), tasks.ARTICLE_PLATFORMS, "图文")
+    else:
+        accounts = _publish_accounts(db, user, set(post.account_ids), tasks.VIDEO_PLATFORMS, "视频")
+    _check_schedule(body.scheduled_at, accounts)
+    _transition(
+        db, post, ReviewStatus.approved, "这条内容已经发布过了",
+        review_status=ReviewStatus.published, scheduled_at=body.scheduled_at,
+    )
+    db.refresh(post)
+    return _create_tasks(db, user, post, accounts)
+
+
+@router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_post(post_id: int, db: DbSession, user: CurrentUser) -> None:
+    post = _get_post(db, user, post_id, lock=True)
+    if post.review_status == ReviewStatus.published:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "已发布的内容不能删除")
+    db.delete(post)
+    db.commit()
+    _remove_video(post)
 
 
 @router.get("/publish-tasks", response_model=list[PublishTaskOut])

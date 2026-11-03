@@ -50,12 +50,12 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 关键文件：
 
-- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容）/ `PublishTask`（每个账号一条）。
+- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status` 和提交时选的 `account_ids`）/ `PublishTask`（每个账号一条，**点「发布」时才生成**）。
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
 - `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
 - `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
-- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`posts`（上传视频创建发布、任务列表、重试、失败截图）。
+- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，任务列表、重试、失败截图）。
 - `frontend/src/platforms.js`：前端的平台名称和能力列表，接入新平台时同步修改。
 - `backend/app/platforms/wechat_mp.py`：公众号第三方平台授权（ticket → component token → 预授权码 → auth_code → refresh_token）和草稿/发表；`wechat_crypto.py` 推送消息的签名与加解密；`routers/wechat_mp.py` 发起授权、回调、授权事件接收 URL（`/api/wechat-mp/events`）。
 - `backend/app/mock_wechat.py`：`WECHAT_MP_MOCK=true` 时挂载的「开放平台」模拟：按官方格式模拟 ticket 推送（beat 每 10 分钟）、第三方平台接口和授权确认页；授权方 access_token 用测试公众号 AppID/AppSecret 真实换取，草稿/发表走真实接口。`/api/mock-wx/push-ticket`、`/push-unauthorized` 可手动触发推送。**生产必须关闭**。
@@ -75,7 +75,11 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
   - 发布、检测成功后返回刷新后的 `storage_state`，由任务写回数据库；
   - 登录失效抛 `LoginExpired`，可预期的失败抛 `PublishError` 并附 `screenshot(...)` 现场截图；
   - 页面选择器写明实测日期，平台改版时最先坏的就是这里。
-- 数据库表目前由 `Base.metadata.create_all` 在启动时创建，**不会修改已有表**。改已有表的字段前，先引入 Alembic（这是待办），不要手改生产库。
+- **数据库用 Alembic 迁移**（2026-11-03 引入）：配置和迁移文件在 `backend/app/alembic.ini`、`backend/app/migrations/`（放在 app 里是因为开发环境只挂载了 app 目录）。backend 启动时由 `app.migrate.upgrade()` 升级到最新版本；引入前用 `create_all` 建的库会先自动标记为 `0001`。改模型后在 backend 容器里生成迁移并检查内容：`alembic -c app/alembic.ini revision --autogenerate -m "说明"`，再用 `alembic -c app/alembic.ini check` 确认模型和库一致。不要手改生产库。
+- 非原生枚举字段（`Enum(..., native_enum=False)`）的列宽按建表时最长的取值确定，以后要加更长的取值时先写迁移改列宽；新枚举字段直接写明 `length`。
+- **内容审核**：提交（视频/图文）后状态为「待审核」，不生成发布任务；「通过」后为「待发布」，需要人手动点「发布」才按账号生成 `PublishTask`（之后的排队、定时、重试不变）；「退回」需填原因，退回/待审核/待发布的内容都可以修改，修改后回到待审核；已发布的不能修改、删除。状态变更都按当前状态条件 `UPDATE`，重复点击只生效一次。点「发布」时**重新校验账号状态和定时范围**（审核期间可能过期），发布时可以改定时。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。旧数据迁移时都标为「已发布」。
+- **前端入口是「内容管理」页**（`views/Contents.vue`）：列表里完成新建、修改、审核、发布、删除。发布视频用弹窗、发布图文用宽抽屉（表单组件 `components/VideoForm.vue` / `ArticleForm.vue`）；有未提交的改动时关闭要确认，提交中不能关。旧地址 `/publish`、`/publish-article`、`/review` 都重定向到这里。
+- 审核预览视频用 `/api/posts/{id}/video?token=`：`<video>` 带不上登录头，令牌只对这一个视频有效、2 小时过期（`security.create_video_token`）。用户提交的正文 HTML 放进页面前都要经过前端 `src/html.js` 的 `cleanHtml`。
 - 代码风格：中文注释，只写「为什么」；跟随周围代码的命名和写法；不加无用的抽象。
 
 ### 已踩过的坑（视频号，2026-11 实测）
@@ -144,7 +148,7 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
   ssh -N -L 15173:127.0.0.1:5173 qiangzi@192.168.64.1
   ```
 
-  然后访问 http://127.0.0.1:15173 。后端在宿主机 127.0.0.1:8000，测试 API 通常直接在 backend 容器里用 httpx 请求 `http://localhost:8000`。
+  然后访问 http://127.0.0.1:15173 。Vite 轮询偶尔会漏掉新改的文件（2026-11-03 遇到过，浏览器一直拿到旧代码），这时 `docker compose --env-file .env.docker-host restart frontend`。后端在宿主机 127.0.0.1:8000，测试 API 通常直接在 backend 容器里用 httpx 请求 `http://localhost:8000`。
 - 在测试脚本里拿登录令牌：`app.security.create_access_token(user_id)`。
 
 ### 测试方式
@@ -204,13 +208,13 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 ### 部署（接公众号的前提）
 
 - 生产 compose：不挂源码、Nginx + HTTPS、在 amd64 服务器上构建镜像（服务器上 Chrome 原生运行，比开发机仿真快）。
-- **在有真实客户数据前引入 Alembic**；任务卡在 `running`（worker 崩溃）时的超时回收；数据库和 `CREDENTIALS_KEY` 备份。
+- 任务卡在 `running`（worker 崩溃）时的超时回收；数据库和 `CREDENTIALS_KEY` 备份。
 - 需要用户提供：已备案域名（A 记录指向服务器固定 IP）、服务器 SSH 访问（放好公钥）。
 - 部署后验证：抖音/视频号在服务器 IP 下的登录（可能再要求短信验证）、登录态保持时长。
 
 ### 微信公众号（第三方平台）
 
-已完成（本地模拟）：授权全流程、授权事件接收（ticket、取消授权）、refresh_token 换 token、存草稿、发表（轮询 `freepublish/get` 拿文章链接，2026-11-03 实测通过）、图文编辑页（`contenteditable` 简易编辑器）。
+已完成（本地模拟）：授权全流程、授权事件接收（ticket、取消授权）、refresh_token 换 token、存草稿、发表（轮询 `freepublish/get` 拿文章链接，2026-11-03 实测通过）、图文编辑（`contenteditable` 简易编辑器，在内容管理的抽屉里）。
 测试公众号 GoliveShowE 的 AppID/AppSecret 在 `.env`；2026-11-03 联调在它的草稿箱里留了 2 篇「平台测试请忽略」草稿，并经用户要求发表了 1 篇「矩阵平台发布测试」（发表不推送粉丝，但有链接即可访问），均已提醒用户在公众号后台删除。
 还没做：授权方「消息与事件接收 URL」（`PUBLISHJOBFINISH` 发表结果推送）、多图文、富文本编辑器、正文外链图片处理、公众号未认证时的提示。
 

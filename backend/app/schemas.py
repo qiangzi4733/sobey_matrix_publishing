@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import AccountStatus, Platform, PublishStatus, UserRole
+from app.models import AccountStatus, Platform, PublishStatus, ReviewStatus, UserRole
 
 
 class RegisterIn(BaseModel):
@@ -90,6 +90,52 @@ class PublishTaskOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+
+class PostAccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    platform: Platform
+    display_name: str
+    status: AccountStatus
+
+
+class PostOut(BaseModel):
+    id: int
+    kind: str  # video / article
+    title: str
+    review_status: ReviewStatus
+    review_note: str | None
+    reviewer_name: str | None
+    reviewed_at: datetime | None
+    creator_name: str | None
+    # 已被移除的账号不在这里
+    accounts: list[PostAccountOut]
+    scheduled_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PostDetailOut(PostOut):
+    description: str
+    tags: list[str]
+    video_url: str | None = None
+    author: str = ""
+    content: str = ""
+    cover_url: str = ""
+    source_url: str = ""
+    open_comment: bool = False
+    draft_only: bool = True
+
+
+class RejectIn(BaseModel):
+    note: str = Field(min_length=1, max_length=500)
+
+
+class PublishIn(BaseModel):
+    # 发布时可以改定时：审核期间原定时间可能已过或超出平台允许的范围
+    scheduled_at: datetime | None = None
 
 
 class ImageOut(BaseModel):

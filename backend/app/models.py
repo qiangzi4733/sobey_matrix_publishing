@@ -28,6 +28,13 @@ class PublishStatus(str, enum.Enum):
     failed = "failed"
 
 
+class ReviewStatus(str, enum.Enum):
+    pending = "pending"  # 待审核
+    rejected = "rejected"  # 已退回，可修改后重新提交
+    approved = "approved"  # 审核通过，等人手动点发布
+    published = "published"  # 已点发布，按账号生成了 PublishTask
+
+
 class UserRole(str, enum.Enum):
     owner = "owner"
     member = "member"
@@ -97,14 +104,26 @@ class Post(Timestamped, Base):
     # 相对 media_dir 的路径；图文为空字符串（正文在 Article）
     video_path: Mapped[str] = mapped_column(String(500))
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 引入审核前的内容都是直接发布的，所以已有行默认 published
+    review_status: Mapped[ReviewStatus] = mapped_column(
+        Enum(ReviewStatus, native_enum=False, length=20), index=True, server_default=ReviewStatus.published.value
+    )
+    # 提交时选的账号，点发布时才生成 PublishTask
+    account_ids: Mapped[list[int]] = mapped_column(JSON, server_default="[]")
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     tasks: Mapped[list["PublishTask"]] = relationship(back_populates="post")
-    article: Mapped["Article | None"] = relationship()
+    # 正文跟着内容一起删（删除未发布的内容时）
+    article: Mapped["Article | None"] = relationship(cascade="all, delete-orphan")
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+    reviewer: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by])
 
 
 class Article(Base):
     """公众号图文的正文部分，标题、摘要（description）、定时沿用 Post。
-    单独建表是因为 create_all 不会给已有的 posts 表加字段（Alembic 引入前不改已有表）。"""
+    单独建表是当时还没有 Alembic，不能给已有的 posts 表加字段。"""
 
     __tablename__ = "articles"
 

@@ -1,10 +1,12 @@
 <template>
-  <el-card header="发布视频" class="card">
+  <div>
+    <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
     <el-form :model="form" label-width="90px" @submit.prevent="submit">
-      <el-form-item label="视频" required>
+      <el-form-item label="视频" :required="!postId">
+        <video v-if="videoUrl && !file" :src="videoUrl" controls class="video" />
         <el-upload :auto-upload="false" :limit="1" accept=".mp4,.mov" :on-change="pickFile" :on-remove="() => (file = null)">
-          <el-button>选择视频文件</el-button>
-          <template #tip><div class="tip">支持 mp4 / mov</div></template>
+          <el-button>{{ postId ? '更换视频' : '选择视频文件' }}</el-button>
+          <template #tip><div class="tip">支持 mp4 / mov{{ postId ? '，不选则沿用原视频' : '' }}</div></template>
         </el-upload>
       </el-form-item>
       <el-form-item label="标题" required>
@@ -28,42 +30,60 @@
       <el-form-item label="定时发布">
         <div>
           <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
-          <div class="tip">视频号需在 10 分钟后、30 天内；抖音需在 2 小时后、14 天内。提交后由平台到点自动发布</div>
+          <div class="tip">视频号需在 10 分钟后、30 天内；抖音需在 2 小时后、14 天内。审核通过点「发布」时还可以修改</div>
         </div>
       </el-form-item>
+      <el-form-item v-if="submitting && file" label="上传进度">
+        <el-progress :percentage="progress" style="width: 100%" />
+      </el-form-item>
       <el-form-item>
-        <el-button type="primary" native-type="submit" :loading="submitting">提交发布</el-button>
+        <el-button :disabled="submitting" @click="$emit('cancel')">取消</el-button>
+        <el-button type="primary" native-type="submit" :loading="submitting">提交审核</el-button>
       </el-form-item>
     </el-form>
-  </el-card>
+  </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import api from '../api'
 import { PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
 
-const router = useRouter()
+// 不传 postId 是新建，传了是修改
+const props = defineProps({ postId: { type: Number, default: null } })
+const emit = defineEmits(['saved', 'cancel'])
+const postId = props.postId
+const reviewNote = ref('')
+const videoUrl = ref('')
 const accounts = ref([])
 const file = ref(null)
 const submitting = ref(false)
+const progress = ref(0)
 const form = reactive({ title: '', description: '', tags: [], accountIds: [], scheduledAt: null })
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
+let saved = ''
+
+const snapshot = () => JSON.stringify(form)
+
+// 外层关闭弹窗前用：上传中不能关，有改动要确认
+defineExpose({
+  busy: () => submitting.value,
+  dirty: () => Boolean(file.value) || snapshot() !== saved,
+})
 
 function pickFile(uploadFile) {
   file.value = uploadFile.raw
 }
 
 async function submit() {
-  if (!file.value) return ElMessage.warning('请选择视频')
+  if (!file.value && !postId) return ElMessage.warning('请选择视频')
   if (!form.title.trim()) return ElMessage.warning('请填写标题')
   if (!form.accountIds.length) return ElMessage.warning('请选择发布账号')
 
   const body = new FormData()
-  body.append('video', file.value)
+  if (file.value) body.append('video', file.value)
   body.append('title', form.title)
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
@@ -71,10 +91,17 @@ async function submit() {
   if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
   submitting.value = true
+  progress.value = 0
+  const config = {
+    onUploadProgress: (e) => {
+      if (e.total) progress.value = Math.min(99, Math.round((e.loaded / e.total) * 100))
+    },
+  }
   try {
-    await api.post('/posts', body)
-    ElMessage.success('已提交，正在发布')
-    router.push({ name: 'tasks' })
+    if (postId) await api.put(`/posts/${postId}`, body, config)
+    else await api.post('/posts', body, config)
+    ElMessage.success('已提交审核')
+    emit('saved')
   } finally {
     submitting.value = false
   }
@@ -83,12 +110,32 @@ async function submit() {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
+  if (postId) {
+    const post = (await api.get(`/posts/${postId}`)).data
+    Object.assign(form, {
+      title: post.title,
+      description: post.description,
+      tags: post.tags,
+      accountIds: post.accounts.map((a) => a.id),
+      scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
+    })
+    videoUrl.value = post.video_url
+    reviewNote.value = post.review_note || ''
+  }
+  saved = snapshot()
 })
 </script>
 
 <style scoped>
-.card {
-  max-width: 760px;
+.note {
+  margin-bottom: 16px;
+}
+.video {
+  display: block;
+  width: 320px;
+  max-height: 240px;
+  margin-bottom: 8px;
+  background: #000;
 }
 .tip {
   color: var(--el-text-color-secondary);

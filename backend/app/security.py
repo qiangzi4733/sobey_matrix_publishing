@@ -31,6 +31,20 @@ def decode_access_token(token: str) -> int | None:
     return int(payload["sub"])
 
 
+# <video> 标签带不上 Authorization 头，审核预览用只能看这一个视频、短时有效的令牌放在地址里
+def create_video_token(post_id: int) -> str:
+    expire = datetime.now(UTC) + timedelta(hours=2)
+    return jwt.encode({"video": post_id, "exp": expire}, get_settings().jwt_secret, algorithm="HS256")
+
+
+def verify_video_token(token: str, post_id: int) -> bool:
+    try:
+        payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return False
+    return payload.get("video") == post_id
+
+
 def _fernet() -> Fernet:
     key = get_settings().credentials_key
     if not key:

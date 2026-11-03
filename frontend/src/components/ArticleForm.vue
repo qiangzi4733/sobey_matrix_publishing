@@ -1,5 +1,6 @@
 <template>
-  <el-card header="发布图文（微信公众号）" class="card">
+  <div>
+    <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
     <el-form :model="form" label-width="90px" @submit.prevent="submit">
       <el-form-item label="标题" required>
         <el-input v-model="form.title" maxlength="64" show-word-limit />
@@ -56,25 +57,30 @@
       <el-form-item label="定时">
         <div>
           <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即提交" :disabled-date="(d) => d < startOfToday" />
-          <div class="tip">到点由本平台提交给公众号</div>
+          <div class="tip">到点由本平台提交给公众号。审核通过点「发布」时还可以修改</div>
         </div>
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" native-type="submit" :loading="submitting">提交</el-button>
+        <el-button :disabled="submitting" @click="$emit('cancel')">取消</el-button>
+        <el-button type="primary" native-type="submit" :loading="submitting">提交审核</el-button>
       </el-form-item>
     </el-form>
-  </el-card>
+  </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import { cleanHtml } from '../html'
 import { ARTICLE_PLATFORMS } from '../platforms'
 
-const router = useRouter()
+// 不传 postId 是新建，传了是修改
+const props = defineProps({ postId: { type: Number, default: null } })
+const emit = defineEmits(['saved', 'cancel'])
+const postId = props.postId
+const reviewNote = ref('')
 const accounts = ref([])
 const editor = ref(null)
 const imageInput = ref(null)
@@ -90,6 +96,16 @@ const form = reactive({
   draftOnly: true,
   accountIds: [],
   scheduledAt: null,
+})
+let saved = ''
+
+// 正文在 contenteditable 里，不在 form 中，一起比较
+const snapshot = () => JSON.stringify(form) + (editor.value?.innerHTML ?? '')
+
+// 外层关闭抽屉前用：提交中不能关，有改动要确认
+defineExpose({
+  busy: () => submitting.value,
+  dirty: () => snapshot() !== saved,
 })
 
 async function upload(file) {
@@ -131,12 +147,12 @@ async function submit() {
   if (!editor.value.innerText.trim() && !content.includes('<img')) return ElMessage.warning('请填写正文')
   if (!form.accountIds.length) return ElMessage.warning('请选择公众号')
   if (!form.draftOnly) {
-    await ElMessageBox.confirm('发表后文章对外可见，确定直接发表？', '直接发表', { type: 'warning' })
+    await ElMessageBox.confirm('审核通过并发布后文章对外可见，确定选择直接发表？', '直接发表', { type: 'warning' })
   }
 
   submitting.value = true
   try {
-    await api.post('/articles', {
+    const body = {
       title: form.title,
       author: form.author,
       digest: form.digest,
@@ -147,9 +163,11 @@ async function submit() {
       draft_only: form.draftOnly,
       account_ids: form.accountIds,
       scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
-    })
-    ElMessage.success('已提交')
-    router.push({ name: 'tasks' })
+    }
+    if (postId) await api.put(`/articles/${postId}`, body)
+    else await api.post('/articles', body)
+    ElMessage.success('已提交审核')
+    emit('saved')
   } finally {
     submitting.value = false
   }
@@ -158,12 +176,29 @@ async function submit() {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => ARTICLE_PLATFORMS.includes(a.platform))
+  if (postId) {
+    const post = (await api.get(`/posts/${postId}`)).data
+    Object.assign(form, {
+      title: post.title,
+      author: post.author,
+      digest: post.description,
+      coverUrl: post.cover_url,
+      sourceUrl: post.source_url,
+      openComment: post.open_comment,
+      draftOnly: post.draft_only,
+      accountIds: post.accounts.map((a) => a.id),
+      scheduledAt: post.scheduled_at ? new Date(post.scheduled_at) : null,
+    })
+    editor.value.innerHTML = cleanHtml(post.content)
+    reviewNote.value = post.review_note || ''
+  }
+  saved = snapshot()
 })
 </script>
 
 <style scoped>
-.card {
-  max-width: 860px;
+.note {
+  margin-bottom: 16px;
 }
 .tip {
   color: var(--el-text-color-secondary);

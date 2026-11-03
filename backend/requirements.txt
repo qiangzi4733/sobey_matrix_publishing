@@ -10,3 +10,4 @@ cryptography==44.0.2
 celery[redis]==5.5.1
 httpx==0.28.1
 python-multipart==0.0.20
+alembic==1.18.4
