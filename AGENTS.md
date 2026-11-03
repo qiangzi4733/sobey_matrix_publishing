@@ -32,7 +32,7 @@
 | 平台 | 方式 | 状态 |
 |---|---|---|
 | 视频号 | 扫码登录 + 浏览器自动化（patchright + Google Chrome） | **核心链路已跑通**：扫码登录、登录检测、发布、平台原生定时发表，均已用真实账号验证（立即发布由用户自行测试，结果未记录）。还缺的功能见「待办」 |
-| 微信公众号 | 微信开放平台**第三方平台**（平台型）授权，用户的资质已申请下来 | 未开始 |
+| 微信公众号 | 微信开放平台**第三方平台**（平台型）授权，用户的资质已申请下来 | **本地模拟授权 + 真实草稿接口已跑通**（2026-11-03）：第三方平台一侧由 `mock_wechat.py` 模拟，存草稿用测试公众号真实验证；直接发表未测。真实第三方平台要等域名和部署 |
 | 抖音 | 扫码登录 + 浏览器自动化（参考 social-auto-upload 的 `uploader/douyin_uploader`） | **核心链路已跑通**：扫码登录（含短信身份验证）、登录检测、发布、平台原生定时发布。登录、检测、定时发布已用真实账号验证；立即发布未测。还缺的功能见「待办」 |
 | 快手 | 快手开放平台 OAuth，scope `user_video_publish`，三步上传发布 | **等待权限审批，暂不做** |
 
@@ -57,6 +57,9 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
 - `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`posts`（上传视频创建发布、任务列表、重试、失败截图）。
 - `frontend/src/platforms.js`：前端的平台名称和能力列表，接入新平台时同步修改。
+- `backend/app/platforms/wechat_mp.py`：公众号第三方平台授权（ticket → component token → 预授权码 → auth_code → refresh_token）和草稿/发表；`wechat_crypto.py` 推送消息的签名与加解密；`routers/wechat_mp.py` 发起授权、回调、授权事件接收 URL（`/api/wechat-mp/events`）。
+- `backend/app/mock_wechat.py`：`WECHAT_MP_MOCK=true` 时挂载的「开放平台」模拟：按官方格式模拟 ticket 推送（beat 每 10 分钟）、第三方平台接口和授权确认页；授权方 access_token 用测试公众号 AppID/AppSecret 真实换取，草稿/发表走真实接口。`/api/mock-wx/push-ticket`、`/push-unauthorized` 可手动触发推送。**生产必须关闭**。
+- 图文：`Article`（正文、封面，按 post_id 挂在 `Post` 上）、`PublishResult`（草稿 media_id、文章链接）是新表，没有改已有表。正文图片先传到本平台 `/api/article-images/{tenant}/{uuid}`，发布时由 worker 转传微信（`uploadimg`）。
 
 ### 必须遵守的设计约定
 
@@ -206,6 +209,11 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 - 部署后验证：抖音/视频号在服务器 IP 下的登录（可能再要求短信验证）、登录态保持时长。
 
 ### 微信公众号（第三方平台）
+
+已完成（本地模拟）：授权全流程、授权事件接收（ticket、取消授权）、refresh_token 换 token、存草稿、发表（含轮询结果，未实测）、图文编辑页（`contenteditable` 简易编辑器）。
+测试公众号 GoliveShowE 的 AppID/AppSecret 在 `.env`；2026-11-03 联调在它的草稿箱里留了 2 篇「平台测试请忽略」草稿，已提醒用户删除。
+还没做：授权方「消息与事件接收 URL」（`PUBLISHJOBFINISH` 发表结果推送）、多图文、富文本编辑器、正文外链图片处理、公众号未认证时的提示。
+
 
 接收 `component_verify_ticket`（授权事件接收 URL，需要公网 HTTPS + 已备案域名）、`component_access_token`、预授权码与授权回调、`authorizer_refresh_token` 刷新；发表流程：上传正文图片（`uploadimg`）和封面（永久素材）→ `draft/add` → `freepublish/submit` → 结果通过事件推送或 `freepublish/get` 确认。客户的公众号必须是**已认证的企业主体**才能调用发表接口。需要新的「图文」内容类型和文章编辑页，`Post` 目前只有视频字段。开放平台后台的开发配置（接收 URL、授权发起页域名、IP 白名单）要等域名确定后告诉用户填写。
 

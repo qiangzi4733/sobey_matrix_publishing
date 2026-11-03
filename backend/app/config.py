@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     wechat_component_token: str = ""
     wechat_component_aes_key: str = ""
 
+    # 本地开发没有公网域名收不到微信推送，开启后由 backend 自己模拟开放平台的第三方平台接口和授权页（见 app.mock_wechat）。
+    # 授权方 access_token 用测试公众号的 AppID/AppSecret 向微信真实换取，草稿、发表走真实接口。生产必须关闭
+    wechat_mp_mock: bool = False
+    wechat_mp_mock_appid: str = ""
+    wechat_mp_mock_appsecret: str = ""
+    wechat_mp_mock_name: str = "测试公众号"
+    # 容器之间访问 backend 的地址（worker 调模拟接口、模拟推送 ticket 用）
+    internal_backend_url: str = "http://backend:8000"
+
     # 对外访问地址，用于拼接授权回调
     public_base_url: str = "http://127.0.0.1:5173"
 

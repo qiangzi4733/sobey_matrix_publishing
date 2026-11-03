@@ -12,7 +12,8 @@
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
           <!-- 平台自带定时：提交成功只代表平台已接收，到点由平台发布 -->
-          <el-tag v-if="row.status === 'success' && row.scheduled_at" type="success">已提交定时</el-tag>
+          <el-tag v-if="row.status === 'success' && row.draft" type="success">已存草稿</el-tag>
+          <el-tag v-else-if="row.status === 'success' && row.scheduled_at" type="success">已提交定时</el-tag>
           <el-tag v-else :type="STATUS[row.status].type">{{ STATUS[row.status].label }}</el-tag>
         </template>
       </el-table-column>
@@ -28,6 +29,7 @@
       </el-table-column>
       <el-table-column label="操作" width="160">
         <template #default="{ row }">
+          <el-link v-if="row.url" :href="row.url" target="_blank" type="primary" class="op">查看文章</el-link>
           <el-button v-if="row.needs_code" link type="warning" @click="openVerify(row)">输入验证码</el-button>
           <el-button v-if="row.has_screenshot" link type="primary" @click="showScreenshot(row)">截图</el-button>
           <el-button v-if="row.status === 'failed'" link type="primary" @click="retry(row)">重试</el-button>
@@ -134,6 +136,9 @@ onBeforeUnmount(() => clearTimeout(timer))
 }
 .screenshot {
   width: 100%;
+}
+.op {
+  margin-right: 12px;
 }
 .code {
   display: flex;

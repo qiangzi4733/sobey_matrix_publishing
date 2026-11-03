@@ -4,6 +4,8 @@ import Layout from './views/Layout.vue'
 import Login from './views/Login.vue'
 import Accounts from './views/Accounts.vue'
 import Publish from './views/Publish.vue'
+import PublishArticle from './views/PublishArticle.vue'
+import WechatMpCallback from './views/WechatMpCallback.vue'
 import Tasks from './views/Tasks.vue'
 
 const router = createRouter({
@@ -16,7 +18,9 @@ const router = createRouter({
       redirect: '/accounts',
       children: [
         { path: 'accounts', name: 'accounts', component: Accounts },
+        { path: 'accounts/wechat-mp/callback', name: 'wechat-mp-callback', component: WechatMpCallback },
         { path: 'publish', name: 'publish', component: Publish },
+        { path: 'publish-article', name: 'publish-article', component: PublishArticle },
         { path: 'tasks', name: 'tasks', component: Tasks },
       ],
     },

@@ -81,9 +81,39 @@ class PublishTaskOut(BaseModel):
     status: PublishStatus
     error: str | None
     has_screenshot: bool
+    # 公众号：文章链接；只存了草稿时 draft 为 true
+    url: str | None = None
+    draft: bool = False
     # 发布中平台要求短信验证码，等客户输入
     needs_code: bool = False
     scheduled_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+
+class ImageOut(BaseModel):
+    url: str
+
+
+class ArticleIn(BaseModel):
+    # 长度限制按公众号草稿接口的要求
+    title: str = Field(min_length=1, max_length=64)
+    author: str = Field(default="", max_length=16)
+    digest: str = Field(default="", max_length=120)
+    content: str = Field(min_length=1, max_length=200_000)
+    cover_url: str
+    source_url: str = Field(default="", max_length=500, pattern=r"^(https?://.*)?$")
+    open_comment: bool = False
+    draft_only: bool = True
+    account_ids: list[int] = Field(min_length=1)
+    scheduled_at: datetime | None = None
+
+
+class WechatAuthorizeOut(BaseModel):
+    url: str
+
+
+class WechatCallbackIn(BaseModel):
+    state: str
+    auth_code: str = Field(min_length=1, max_length=512)

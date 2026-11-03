@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from app import login_sessions, verification
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import Account, AccountStatus, Platform, Post, PublishStatus, PublishTask
+from app.models import Account, AccountStatus, Platform, Post, PublishResult, PublishStatus, PublishTask
 from app.platforms.base import LoginExpired, PublishError
 from app.security import decrypt_credentials, encrypt_credentials
 from app.worker import celery_app
@@ -19,9 +19,11 @@ from app.worker import celery_app
 log = logging.getLogger(__name__)
 
 BROWSER_QUEUE = "browser"
-# 扫码登录的平台；已支持发布的平台。公众号、快手接入后再加
+# 扫码登录的平台；已支持发布视频、图文的平台。快手接入后再加
 BROWSER_PLATFORMS = {Platform.channels, Platform.douyin}
-PUBLISHABLE = {Platform.channels, Platform.douyin}
+VIDEO_PLATFORMS = {Platform.channels, Platform.douyin}
+ARTICLE_PLATFORMS = {Platform.wechat_mp}
+PUBLISHABLE = VIDEO_PLATFORMS | ARTICLE_PLATFORMS
 
 
 def _now() -> datetime:
@@ -168,6 +170,34 @@ def dispatch_due_tasks() -> int:
         return len(due)
 
 
+def _relogin_hint(platform: Platform) -> str:
+    return "请重新授权" if platform == Platform.wechat_mp else "请重新扫码登录"
+
+
+def _publish_wechat_mp(task: PublishTask, account: Account) -> None:
+    from app.platforms import wechat_mp
+
+    post, article = task.post, task.post.article
+    if article is None:
+        raise PublishError("公众号只支持发布图文")
+    media_dir = Path(get_settings().media_dir)
+    credentials, result = wechat_mp.publish(
+        decrypt_credentials(account.credentials_encrypted),
+        {
+            "title": post.title,
+            "author": article.author,
+            "digest": post.description,
+            "content": article.content,
+            "content_source_url": article.source_url,
+            "need_open_comment": int(article.open_comment),
+        },
+        media_dir / article.cover_path,
+        submit=not article.draft_only,
+    )
+    account.credentials_encrypted = encrypt_credentials(credentials)
+    task.result = PublishResult(url=result.get("url"), data=result)
+
+
 # 发布不可重复执行：不用 acks_late，worker 中途崩溃宁可漏发也不重复发
 @celery_app.task(acks_late=False, time_limit=2 * 3600)
 def run_publish_task(task_id: int) -> None:
@@ -187,28 +217,31 @@ def run_publish_task(task_id: int) -> None:
             if account is None:
                 raise PublishError("账号已被移除")
             if account.status != AccountStatus.active or not account.credentials_encrypted:
-                raise PublishError("账号登录已失效，请重新扫码登录")
+                raise PublishError(f"账号登录已失效，{_relogin_hint(account.platform)}")
             if task.platform not in PUBLISHABLE:
                 raise PublishError("该平台暂不支持发布")
 
-            module = _browser_module(task.platform)
-            post = task.post
-            state = decrypt_credentials(account.credentials_encrypted)["storage_state"]
-            new_state = module.publish(
-                state,
-                Path(get_settings().media_dir) / post.video_path,
-                title=post.title,
-                description=post.description,
-                tags=post.tags,
-                schedule_at=post.scheduled_at,
-                ask_code=verification.asker(f"task:{task_id}"),
-            )
-            account.credentials_encrypted = encrypt_credentials({"storage_state": new_state})
+            if task.platform in ARTICLE_PLATFORMS:
+                _publish_wechat_mp(task, account)
+            else:
+                module = _browser_module(task.platform)
+                post = task.post
+                state = decrypt_credentials(account.credentials_encrypted)["storage_state"]
+                new_state = module.publish(
+                    state,
+                    Path(get_settings().media_dir) / post.video_path,
+                    title=post.title,
+                    description=post.description,
+                    tags=post.tags,
+                    schedule_at=post.scheduled_at,
+                    ask_code=verification.asker(f"task:{task_id}"),
+                )
+                account.credentials_encrypted = encrypt_credentials({"storage_state": new_state})
             task.status = PublishStatus.success
         except LoginExpired as exc:
             account.status = AccountStatus.expired
             task.status = PublishStatus.failed
-            task.error = f"{exc}，请重新扫码登录"
+            task.error = f"{exc}，{_relogin_hint(account.platform)}"
         except PublishError as exc:
             task.status = PublishStatus.failed
             task.error = str(exc)
@@ -219,3 +252,14 @@ def run_publish_task(task_id: int) -> None:
             task.error = f"发布失败：{exc}"
         task.finished_at = _now()
         db.commit()
+
+
+# ---------- 本地模拟开放平台 ----------
+
+
+@celery_app.task
+def mock_push_component_ticket() -> None:
+    """模拟微信每 10 分钟推送 component_verify_ticket（只在 WECHAT_MP_MOCK 开启时由 beat 调度）。"""
+    import httpx
+
+    httpx.post(f"{get_settings().internal_backend_url}/api/mock-wx/push-ticket", timeout=30).raise_for_status()

@@ -8,7 +8,8 @@ export const PLATFORMS = {
 // 扫码登录、需要定期检测登录状态的平台（已接入的）
 export const QR_LOGIN_PLATFORMS = ['channels', 'douyin']
 
-// 已支持发布的平台
-export const PUBLISHABLE_PLATFORMS = ['channels', 'douyin']
+// 已支持发布视频、图文的平台
+export const VIDEO_PLATFORMS = ['channels', 'douyin']
+export const ARTICLE_PLATFORMS = ['wechat_mp']
 
 export const formatTime = (value) => (value ? new Date(value).toLocaleString() : '-')

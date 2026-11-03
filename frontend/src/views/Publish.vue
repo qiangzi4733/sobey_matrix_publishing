@@ -44,7 +44,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import api from '../api'
-import { PLATFORMS, PUBLISHABLE_PLATFORMS } from '../platforms'
+import { PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
 
 const router = useRouter()
 const accounts = ref([])
@@ -82,7 +82,7 @@ async function submit() {
 
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
-  accounts.value = all.filter((a) => PUBLISHABLE_PLATFORMS.includes(a.platform))
+  accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
 })
 </script>
 

@@ -2,8 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.config import get_settings
 from app.db import Base, engine
-from app.routers import accounts, auth, posts
+from app.routers import accounts, auth, posts, wechat_mp
 
 
 @asynccontextmanager
@@ -17,6 +18,12 @@ app = FastAPI(title="Matrix Publishing", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(accounts.router)
 app.include_router(posts.router)
+app.include_router(wechat_mp.router)
+
+if get_settings().wechat_mp_mock:
+    from app import mock_wechat
+
+    app.include_router(mock_wechat.router)
 
 
 @app.get("/api/health")

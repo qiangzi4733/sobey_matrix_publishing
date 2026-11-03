@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -94,11 +94,30 @@ class Post(Timestamped, Base):
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # 相对 media_dir 的路径
+    # 相对 media_dir 的路径；图文为空字符串（正文在 Article）
     video_path: Mapped[str] = mapped_column(String(500))
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     tasks: Mapped[list["PublishTask"]] = relationship(back_populates="post")
+    article: Mapped["Article | None"] = relationship()
+
+
+class Article(Base):
+    """公众号图文的正文部分，标题、摘要（description）、定时沿用 Post。
+    单独建表是因为 create_all 不会给已有的 posts 表加字段（Alembic 引入前不改已有表）。"""
+
+    __tablename__ = "articles"
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), primary_key=True)
+    author: Mapped[str] = mapped_column(String(16), default="")
+    # HTML，图片引用本平台的 /api/article-images/ 地址，发布时再转传微信
+    content: Mapped[str] = mapped_column(Text)
+    # 相对 media_dir 的路径
+    cover_path: Mapped[str] = mapped_column(String(500))
+    source_url: Mapped[str] = mapped_column(String(500), default="")
+    open_comment: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 只存草稿箱，不发表（发表后对外可见）
+    draft_only: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class PublishTask(Timestamped, Base):
@@ -120,3 +139,14 @@ class PublishTask(Timestamped, Base):
 
     post: Mapped[Post] = relationship(back_populates="tasks")
     account: Mapped[Account | None] = relationship()
+    result: Mapped["PublishResult | None"] = relationship()
+
+
+class PublishResult(Base):
+    """发布成功后平台返回的信息，如公众号的草稿 media_id、文章链接。"""
+
+    __tablename__ = "publish_results"
+
+    task_id: Mapped[int] = mapped_column(ForeignKey("publish_tasks.id", ondelete="CASCADE"), primary_key=True)
+    url: Mapped[str | None] = mapped_column(String(1000))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)

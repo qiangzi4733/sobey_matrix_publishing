@@ -12,7 +12,7 @@
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item command="channels">扫码登录视频号</el-dropdown-item>
-            <el-dropdown-item command="wechat_mp" disabled>授权微信公众号（开发中）</el-dropdown-item>
+            <el-dropdown-item command="wechat_mp">授权微信公众号</el-dropdown-item>
             <el-dropdown-item command="douyin">扫码登录抖音</el-dropdown-item>
             <el-dropdown-item command="kuaishou" disabled>授权快手（权限申请中）</el-dropdown-item>
           </el-dropdown-menu>
@@ -52,6 +52,14 @@
               检测
             </el-button>
           </template>
+          <el-button
+            v-if="row.platform === 'wechat_mp' && row.status !== 'active'"
+            link
+            type="warning"
+            @click="addAccount('wechat_mp')"
+          >
+            重新授权
+          </el-button>
           <el-button link type="primary" @click="rename(row)">改名</el-button>
           <el-button link type="danger" @click="remove(row)">移除</el-button>
         </template>
@@ -98,7 +106,13 @@ async function load() {
   }
 }
 
-function addAccount(command) {
+async function addAccount(command) {
+  if (command === 'wechat_mp') {
+    // 跳到微信授权页，客户确认后跳回 /accounts/wechat-mp/callback
+    const { data } = await api.post('/wechat-mp/authorize')
+    window.location.href = data.url
+    return
+  }
   loginPlatform.value = command
   loginVisible.value = true
 }

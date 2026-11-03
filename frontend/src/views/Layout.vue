@@ -4,6 +4,7 @@
       <div class="logo">矩阵分发平台</div>
       <el-menu router :default-active="$route.path">
         <el-menu-item index="/publish">发布视频</el-menu-item>
+        <el-menu-item index="/publish-article">发布图文</el-menu-item>
         <el-menu-item index="/tasks">发布记录</el-menu-item>
         <el-menu-item index="/accounts">账号管理</el-menu-item>
       </el-menu>

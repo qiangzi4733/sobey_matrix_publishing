@@ -17,6 +17,11 @@ celery_app.conf.update(
         "check-all-accounts": {"task": "app.tasks.check_all_accounts", "schedule": crontab(minute=0, hour="*/6")},
     },
 )
+if settings.wechat_mp_mock:
+    celery_app.conf.beat_schedule["mock-push-component-ticket"] = {
+        "task": "app.tasks.mock_push_component_ticket",
+        "schedule": crontab(minute="*/10"),
+    }
 
 
 @celery_app.task
