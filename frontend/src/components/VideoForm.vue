@@ -18,6 +18,9 @@
       <el-form-item label="话题">
         <el-select v-model="form.tags" multiple filterable allow-create default-first-option placeholder="输入后回车，不用加 #" style="width: 100%" />
       </el-form-item>
+      <el-form-item label="分类">
+        <CategorySelect v-model="form.categoryId" :categories="categories" style="width: 320px" />
+      </el-form-item>
       <el-form-item label="发布账号" required>
         <el-radio-group v-model="form.accountId">
           <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
@@ -50,9 +53,16 @@ import { ElMessage } from 'element-plus'
 
 import api from '../api'
 import { PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
+import CategorySelect from './CategorySelect.vue'
 
 // 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选
-const props = defineProps({ postId: { type: Number, default: null }, copyFrom: { type: Number, default: null } })
+const props = defineProps({
+  postId: { type: Number, default: null },
+  copyFrom: { type: Number, default: null },
+  categories: { type: Array, required: true },
+  // 新建时默认放到内容管理里当前选中的分类
+  defaultCategory: { type: Number, default: null },
+})
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
 const reviewNote = ref('')
@@ -61,7 +71,7 @@ const accounts = ref([])
 const file = ref(null)
 const submitting = ref(false)
 const progress = ref(0)
-const form = reactive({ title: '', description: '', tags: [], accountId: null, scheduledAt: null })
+const form = reactive({ title: '', description: '', tags: [], categoryId: props.defaultCategory, accountId: null, scheduledAt: null })
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 let saved = ''
 
@@ -89,6 +99,7 @@ async function submit() {
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
   body.append('account_id', form.accountId)
+  if (form.categoryId) body.append('category_id', form.categoryId)
   if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
   submitting.value = true
@@ -113,7 +124,8 @@ onMounted(async () => {
   accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
   if (postId || copyFrom) {
     const post = (await api.get(`/posts/${postId || copyFrom}`)).data
-    Object.assign(form, { title: post.title, description: post.description, tags: post.tags })
+    // 复制时沿用原分类
+    Object.assign(form, { title: post.title, description: post.description, tags: post.tags, categoryId: post.category_id })
     videoUrl.value = post.video_url
     if (postId) {
       form.accountId = post.account?.id ?? null

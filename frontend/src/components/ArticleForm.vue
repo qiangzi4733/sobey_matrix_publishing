@@ -45,6 +45,9 @@
           <el-radio :value="false">直接发表（对外可见）</el-radio>
         </el-radio-group>
       </el-form-item>
+      <el-form-item label="分类">
+        <CategorySelect v-model="form.categoryId" :categories="categories" style="width: 320px" />
+      </el-form-item>
       <el-form-item label="公众号" required>
         <el-radio-group v-model="form.accountId">
           <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
@@ -75,10 +78,17 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { cleanHtml } from '../html'
 import { ARTICLE_PLATFORMS } from '../platforms'
+import CategorySelect from './CategorySelect.vue'
 
 // 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选。
 // 正文图片和封面不会随内容删除，复制的内容直接引用同一批图片
-const props = defineProps({ postId: { type: Number, default: null }, copyFrom: { type: Number, default: null } })
+const props = defineProps({
+  postId: { type: Number, default: null },
+  copyFrom: { type: Number, default: null },
+  categories: { type: Array, required: true },
+  // 新建时默认放到内容管理里当前选中的分类
+  defaultCategory: { type: Number, default: null },
+})
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
 const reviewNote = ref('')
@@ -95,6 +105,7 @@ const form = reactive({
   sourceUrl: '',
   openComment: false,
   draftOnly: true,
+  categoryId: props.defaultCategory,
   accountId: null,
   scheduledAt: null,
 })
@@ -163,6 +174,7 @@ async function submit() {
       open_comment: form.openComment,
       draft_only: form.draftOnly,
       account_id: form.accountId,
+      category_id: form.categoryId,
       scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
     }
     if (postId) await api.put(`/articles/${postId}`, body)
@@ -187,6 +199,8 @@ onMounted(async () => {
       sourceUrl: post.source_url,
       openComment: post.open_comment,
       draftOnly: post.draft_only,
+      // 复制时沿用原分类
+      categoryId: post.category_id,
     })
     editor.value.innerHTML = cleanHtml(post.content)
     if (postId) {

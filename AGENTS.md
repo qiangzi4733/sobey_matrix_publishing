@@ -50,12 +50,12 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 
 关键文件：
 
-- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status` 和提交时选的 `account_id`，账号被移除后为空、要修改时重新选）/ `PublishTask`（每条内容一条，**点「发布」时才生成**；引入单账号前发布的旧内容可能有多条）。
+- `backend/app/models.py`：`Tenant` / `User` / `Account`（矩阵账号，凭证加密存 `credentials_encrypted`）/ `Post`（一次发布的内容，带审核状态 `review_status` 和提交时选的 `account_id`，账号被移除后为空、要修改时重新选）/ `PublishTask`（每条内容一条，**点「发布」时才生成**；引入单账号前发布的旧内容可能有多条）/ `Category`（内容分类，租户内一棵树，`Post.category_id` 为空是未分类）。
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
 - `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
 - `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
-- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，任务列表、重试、失败截图）。
+- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`categories`（内容分类）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，任务列表、重试、失败截图）。
 - `frontend/src/platforms.js`：前端的平台名称和能力列表，接入新平台时同步修改。
 - `backend/app/platforms/wechat_mp.py`：公众号第三方平台授权（ticket → component token → 预授权码 → auth_code → refresh_token）和草稿/发表；`wechat_crypto.py` 推送消息的签名与加解密；`routers/wechat_mp.py` 发起授权、回调、授权事件接收 URL（`/api/wechat-mp/events`）。
 - `backend/app/mock_wechat.py`：`WECHAT_MP_MOCK=true` 时挂载的「开放平台」模拟：按官方格式模拟 ticket 推送（beat 每 10 分钟）、第三方平台接口和授权确认页；授权方 access_token 用测试公众号 AppID/AppSecret 真实换取，草稿/发表走真实接口。`/api/mock-wx/push-ticket`、`/push-unauthorized` 可手动触发推送。**生产必须关闭**。
@@ -79,7 +79,8 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - 非原生枚举字段（`Enum(..., native_enum=False)`）的列宽按建表时最长的取值确定，以后要加更长的取值时先写迁移改列宽；新枚举字段直接写明 `length`。
 - **内容审核**：提交（视频/图文）后状态为「待审核」，不生成发布任务；「通过」后为「待发布」，需要人手动点「发布」才生成 `PublishTask`（之后的排队、定时、重试不变）；「退回」需填原因，退回/待审核/待发布的内容都可以修改，修改后回到待审核；已发布的不能修改、删除。状态变更都按当前状态条件 `UPDATE`，重复点击只生效一次。点「发布」时**重新校验账号状态和定时范围**（审核期间可能过期），发布时可以改定时。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。旧数据迁移时都标为「已发布」。
 - **前端入口是「内容管理」页**（`views/Contents.vue`）：列表里完成新建、修改、审核、发布、删除。发布视频用弹窗、发布图文用宽抽屉（表单组件 `components/VideoForm.vue` / `ArticleForm.vue`）；有未提交的改动时关闭要确认，提交中不能关。旧地址 `/publish`、`/publish-article`、`/review` 都重定向到这里。
-- **复制**：内容列表和详情可以复制任意状态的内容，换个账号再提交（账号、定时清空）。视频提交时带 `copy_from`，后端给原视频建硬链接，不重新上传、也不和原内容共用路径（删除内容会删视频文件）；图文直接引用同一批图片（正文图片和封面不随内容删除）。视频只能复制到视频渠道、图文只能到公众号。
+- **内容分类**（2026-11-03）：租户内多级分类，最多 3 层（后端 `routers/categories.py` 的 `MAX_DEPTH` 和前端 `src/categories.js` 要一致），一条内容一个分类、可以不选。按分类筛选时包含下级分类；有下级分类或内容的分类不能删除（不自动改成未分类）。分类只是归档：任何状态的内容（包括已发布）都能批量「移到分类」，不需要重新审核、不改 `updated_at`。内容管理页左侧是分类树，另有「只看我提交的」筛选。以后做权限时按分类给用户分配可管理范围（用户已确认）。
+- **复制**：内容列表和详情可以复制任意状态的内容，换个账号再提交（账号、定时清空，分类沿用）。视频提交时带 `copy_from`，后端给原视频建硬链接，不重新上传、也不和原内容共用路径（删除内容会删视频文件）；图文直接引用同一批图片（正文图片和封面不随内容删除）。视频只能复制到视频渠道、图文只能到公众号。
 - 审核预览视频用 `/api/posts/{id}/video?token=`：`<video>` 带不上登录头，令牌只对这一个视频有效、2 小时过期（`security.create_video_token`）。用户提交的正文 HTML 放进页面前都要经过前端 `src/html.js` 的 `cleanHtml`。
 - 代码风格：中文注释，只写「为什么」；跟随周围代码的命名和写法；不加无用的抽象。
 
@@ -126,6 +127,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - 宿主机地址会随虚拟机网络变化：2026-11-02 起虚拟机改为 NAT（虚拟机 `192.168.64.6`，宿主机即网关 `192.168.64.1`），旧地址 `172.16.192.6` 已不可用。连不上时先看 `route -n get default` 的网关，并用 `ssh-keyscan` 核对主机密钥指纹与已知的一致，再**征得用户同意**后更新 `~/.ssh/config` 和 `docker context update mac-host`。
 - 项目在共享目录：虚拟机路径 `/Users/qiangzi/Desktop/VirtualBuddyShared/VM-share/projects/matrix-publishing` = 宿主机路径 `/Users/qiangzi/VM-share/projects/matrix-publishing`。**运行时 bind mount 必须用宿主机路径**，由 `.env.docker-host` 的 `HOST_PROJECT_DIR` 提供。
 - 端口发布在**宿主机**的 127.0.0.1 上，不在虚拟机里。虚拟机里访问前端要开 SSH 隧道（见下）。
+- 虚拟机系统时区是美国太平洋时间，比北京时间晚 15～16 小时。本文档和迁移文件名里的日期都按**北京时间**写，记录新日期时也按北京时间（`TZ=Asia/Shanghai date`）。
 - 未经用户同意不要执行 `docker system prune`、`docker volume prune`、`docker compose down -v` 等清理操作。
 - 国内网络：Docker Hub 直连会断，镜像走 `.env.docker-host` 里的 `IMAGE_MIRROR`（DaoCloud）。镜像站在构建时偶尔对基础镜像返回 401，先 `docker pull` 该镜像再构建。PyPI 用阿里云、npm 用 npmmirror、apt 用阿里云 https 并开了重试。
 
@@ -163,7 +165,8 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 开发库里的测试数据：
 
 - 测试登录账号见 `README.md`（公司「演示公司」）。
-- 该租户下有**用户本人的真实账号**：视频号 IamAdy（`accounts.id = 5`，2026-11-02 登录态已失效，需重新扫码）、抖音 IamAdy（`accounts.id = 6`，登录态有效）。
+- 该租户下有**用户本人的真实账号**：视频号 IamAdy（`accounts.id = 5`，2026-11-02 登录态已失效，需重新扫码）、抖音 IamAdy（`accounts.id = 6`，2026-11-03 检测有效），以及测试公众号 GoliveShowE（`accounts.id = 7`，模拟授权）。
+- 其他租户（如 `tenant_id = 4`「客户A」）里是接口测试时建的假账号和内容，可用来验证跨租户隔离。
 - 两条定时测试作品「平台测试请忽略」：视频号 2026-11-04 21:30、抖音 2026-11-05 21:30，已提醒用户到期前在平台后台手动删除（本平台还不支持删除/撤回）。
 - 测试视频在 media 卷的 `/data/test/sample.mp4`（12 秒竖屏彩条）。
 
@@ -184,7 +187,7 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 
 - 2026-11-02 下午用户是否自己登录过视频号助手？（确认视频号是否只允许一个网页登录，决定产品里要不要提示客户）
 - 客户发的内容是否包含 AI 生成内容？（决定「AI 内容声明」是否列为上线必做）
-- 下一步先做哪个：A. 把视频号/抖音补完整做成可试用；B. 先部署到服务器再接公众号。（2026-11-02 已向用户给出两个方向，尚未选择）
+- 下一步先做哪个：A. 把视频号/抖音补完整做成可试用；B. 先部署到服务器，再把公众号从本地模拟切到真实第三方平台。（2026-11-02 已向用户给出两个方向，尚未选择；之后先做了公众号本地联调和内容审核）
 
 ### 视频号 / 抖音：还要补的
 
@@ -219,8 +222,10 @@ docker compose --env-file .env.docker-host exec -T db psql -U matrix
 测试公众号 GoliveShowE 的 AppID/AppSecret 在 `.env`；2026-11-03 联调在它的草稿箱里留了 2 篇「平台测试请忽略」草稿，并经用户要求发表了 1 篇「矩阵平台发布测试」（发表不推送粉丝，但有链接即可访问），均已提醒用户在公众号后台删除。
 还没做：授权方「消息与事件接收 URL」（`PUBLISHJOBFINISH` 发表结果推送）、多图文、富文本编辑器、正文外链图片处理、公众号未认证时的提示。
 
-
-接收 `component_verify_ticket`（授权事件接收 URL，需要公网 HTTPS + 已备案域名）、`component_access_token`、预授权码与授权回调、`authorizer_refresh_token` 刷新；发表流程：上传正文图片（`uploadimg`）和封面（永久素材）→ `draft/add` → `freepublish/submit` → 结果通过事件推送或 `freepublish/get` 确认。客户的公众号必须是**已认证的企业主体**才能调用发表接口。需要新的「图文」内容类型和文章编辑页，`Post` 目前只有视频字段。开放平台后台的开发配置（接收 URL、授权发起页域名、IP 白名单）要等域名确定后告诉用户填写。
+切到真实第三方平台（部署后）：
+- 微信每 10 分钟往授权事件接收 URL 推 `component_verify_ticket`，这个 URL 需要公网 HTTPS + 已备案域名，所以只能部署后联调。
+- 开放平台后台的开发配置（授权事件接收 URL、授权发起页域名、IP 白名单）要等域名确定后告诉用户填写；`.env` 填真实的 `WECHAT_COMPONENT_*`，关掉 `WECHAT_MP_MOCK`。
+- 客户的公众号必须是**已认证的企业主体**才能调用发表接口。
 
 ### 快手
 

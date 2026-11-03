@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.migrate import upgrade
-from app.routers import accounts, auth, posts, wechat_mp
+from app.routers import accounts, auth, categories, posts, wechat_mp
 
 
 @asynccontextmanager
@@ -16,6 +16,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Matrix Publishing", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(accounts.router)
+app.include_router(categories.router)
 app.include_router(posts.router)
 app.include_router(wechat_mp.router)
 

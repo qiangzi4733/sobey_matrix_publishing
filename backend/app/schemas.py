@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 from app.models import AccountStatus, Platform, PublishStatus, ReviewStatus, UserRole
 
@@ -116,6 +117,8 @@ class PostOut(BaseModel):
     creator_name: str | None
     # 账号被移除后为空
     account: PostAccountOut | None
+    # 为空是未分类；前端按分类列表拼出完整路径
+    category_id: int | None
     scheduled_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -157,7 +160,27 @@ class ArticleIn(BaseModel):
     open_comment: bool = False
     draft_only: bool = True
     account_id: int
+    category_id: int | None = None
     scheduled_at: datetime | None = None
+
+
+class CategoryIn(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
+    parent_id: int | None = None
+
+
+class CategoryOut(BaseModel):
+    id: int
+    parent_id: int | None
+    name: str
+    # 直接挂在这个分类下的内容数（不含子分类）
+    post_count: int
+
+
+class MoveCategoryIn(BaseModel):
+    post_ids: list[int] = Field(min_length=1, max_length=500)
+    # 为空表示移到未分类
+    category_id: int | None = None
 
 
 class WechatAuthorizeOut(BaseModel):

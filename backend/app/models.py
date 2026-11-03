@@ -90,6 +90,18 @@ class Account(Timestamped, Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Category(Timestamped, Base):
+    """内容分类，租户内一棵树（层数限制见 routers/categories.py）。以后按分类给用户分配权限。"""
+
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # 有子分类或内容时不允许删除（接口里检查），外键不级联
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
+    name: Mapped[str] = mapped_column(String(50))
+
+
 class Post(Timestamped, Base):
     """一次发布的内容，只发到一个账号（发布时生成一条 PublishTask）。"""
 
@@ -110,6 +122,8 @@ class Post(Timestamped, Base):
     )
     # 一条内容只发一个账号，点发布时才生成 PublishTask；账号被移除后为空，要修改时重新选
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
+    # 为空是「未分类」；有内容的分类不能删除，外键不会真的触发置空
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), index=True)
     review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

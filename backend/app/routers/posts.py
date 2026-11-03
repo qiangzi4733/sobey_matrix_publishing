@@ -16,10 +16,12 @@ from app.deps import CurrentUser, DbSession
 from app.models import Account, AccountStatus, Article, Platform, Post, PublishStatus, PublishTask, ReviewStatus
 from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
 from app.platforms.wechat_mp import ARTICLE_IMAGE_URL, article_image_path
+from app.routers.categories import get_category, subtree_ids
 from app.schemas import (
     ArticleIn,
     CodeIn,
     ImageOut,
+    MoveCategoryIn,
     PostAccountOut,
     PostDetailOut,
     PostOut,
@@ -74,6 +76,12 @@ def _publish_account(db: DbSession, user: CurrentUser, account_id: int | None, a
     return account
 
 
+def _post_category(db: DbSession, user: CurrentUser, category_id: int | None) -> int | None:
+    if category_id is not None and get_category(db, user, category_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "分类不存在或已被删除，请重新选择")
+    return category_id
+
+
 def _check_schedule(scheduled_at: datetime | None, account: Account) -> None:
     if scheduled_at is None:
         return
@@ -118,6 +126,7 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
         reviewed_at=post.reviewed_at,
         creator_name=post.creator.name if post.creator else None,
         account=PostAccountOut.model_validate(post.account) if post.account else None,
+        category_id=post.category_id,
         scheduled_at=post.scheduled_at,
         created_at=post.created_at,
         updated_at=post.updated_at,
@@ -203,6 +212,7 @@ def create_post(
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
     account_id: Annotated[int, Form()],
+    category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
@@ -222,6 +232,7 @@ def create_post(
         tags=[t.lstrip("#") for t in _split(tags)],
         video_path=_save_video(user, video) if video is not None else _copy_video(db, user, copy_from),
         scheduled_at=scheduled_at,
+        category_id=_post_category(db, user, category_id),
     )
     return _submit_for_review(db, post, account)
 
@@ -233,6 +244,7 @@ def update_post(
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
     account_id: Annotated[int, Form()],
+    category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
@@ -248,6 +260,7 @@ def update_post(
     post.description = description
     post.tags = [t.lstrip("#") for t in _split(tags)]
     post.scheduled_at = scheduled_at
+    post.category_id = _post_category(db, user, category_id)
     return _submit_for_review(db, post, account)
 
 
@@ -306,7 +319,13 @@ def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut
     account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文")
     _check_schedule(body.scheduled_at, account)
     cover_path = _article_cover(body, user)
-    post = Post(tenant_id=user.tenant_id, created_by=user.id, tags=[], video_path="")
+    post = Post(
+        tenant_id=user.tenant_id,
+        created_by=user.id,
+        tags=[],
+        video_path="",
+        category_id=_post_category(db, user, body.category_id),
+    )
     _fill_article(post, body, cover_path)
     return _submit_for_review(db, post, account)
 
@@ -317,16 +336,30 @@ def update_article(post_id: int, body: ArticleIn, db: DbSession, user: CurrentUs
     account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文")
     _check_schedule(body.scheduled_at, account)
     _fill_article(post, body, _article_cover(body, user))
+    post.category_id = _post_category(db, user, body.category_id)
     return _submit_for_review(db, post, account)
 
 
 @router.get("/posts", response_model=list[PostOut])
 def list_posts(
-    db: DbSession, user: CurrentUser, review_status: ReviewStatus | None = None, limit: int = 100
+    db: DbSession,
+    user: CurrentUser,
+    review_status: ReviewStatus | None = None,
+    category_id: int | None = None,
+    uncategorized: bool = False,
+    mine: bool = False,
+    limit: int = 100,
 ) -> list[PostOut]:
+    """category_id 包含下级分类；uncategorized 只看未分类；mine 只看自己提交的。"""
     query = select(Post).where(Post.tenant_id == user.tenant_id)
     if review_status:
         query = query.where(Post.review_status == review_status)
+    if category_id is not None:
+        query = query.where(Post.category_id.in_(subtree_ids(db, user, category_id)))
+    elif uncategorized:
+        query = query.where(Post.category_id.is_(None))
+    if mine:
+        query = query.where(Post.created_by == user.id)
     rows = db.scalars(
         query.options(
             selectinload(Post.article), selectinload(Post.account), selectinload(Post.creator), selectinload(Post.reviewer)
@@ -335,6 +368,20 @@ def list_posts(
         .limit(min(limit, 500))
     ).all()
     return [_post_out(post) for post in rows]
+
+
+@router.post("/posts/category", response_model=int)
+def move_category(body: MoveCategoryIn, db: DbSession, user: CurrentUser) -> int:
+    """批量移到某个分类，返回移动的条数。分类只是归档，任何状态（包括已发布）都能移，也不需要重新审核。"""
+    category_id = _post_category(db, user, body.category_id)
+    moved = db.execute(
+        update(Post)
+        .where(Post.tenant_id == user.tenant_id, Post.id.in_(body.post_ids))
+        # 列表里的「提交时间」用的是 updated_at，移动分类不算修改内容
+        .values(category_id=category_id, updated_at=Post.updated_at)
+    ).rowcount
+    db.commit()
+    return moved
 
 
 @router.get("/posts/{post_id}", response_model=PostDetailOut)
