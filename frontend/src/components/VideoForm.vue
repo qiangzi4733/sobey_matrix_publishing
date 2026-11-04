@@ -9,7 +9,7 @@
           <span>{{ PLATFORMS[currentAccount.platform] }} {{ currentAccount.display_name }}</span>
           <span v-if="currentAccount.status !== 'active'" class="warn">登录已失效</span>
         </template>
-        <span v-else-if="lockedId" class="warn">分类绑定的账号不能发布视频，请到「分类与绑定」修改</span>
+        <span v-else-if="lockedId" class="warn">分类绑定的账号不能发布视频，请到「分类管理」修改</span>
         <span v-else>选择发布账号</span>
       </template>
       <template #actions>

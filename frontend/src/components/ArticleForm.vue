@@ -9,7 +9,7 @@
           <span>公众号 {{ currentAccount.display_name }}</span>
           <span v-if="currentAccount.status !== 'active'" class="warn">授权已失效</span>
         </template>
-        <span v-else-if="lockedId" class="warn">分类绑定的账号不是公众号，不能发布图文，请到「分类与绑定」修改</span>
+        <span v-else-if="lockedId" class="warn">分类绑定的账号不是公众号，不能发布图文，请到「分类管理」修改</span>
         <span v-else>选择公众号</span>
       </template>
       <template #actions>

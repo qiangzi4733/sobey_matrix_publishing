@@ -14,15 +14,12 @@
         </span>
       </div>
 
-      <template v-for="group in NAV" :key="group.label">
-        <span v-if="group.label" class="group">{{ group.label }}</span>
-        <router-link v-for="item in group.items" :key="item.to" :to="item.to" class="item" active-class="active">
-          <el-icon :size="18"><component :is="item.icon" /></el-icon>
-          <span class="item-label">{{ item.label }}</span>
-          <span v-if="item.badge === 'todo' && badges.todo" class="count" :aria-label="`${badges.todo} 条内容等待处理`">{{ badges.todo }}</span>
-          <span v-if="item.badge === 'accounts' && badges.expiredAccounts" class="dot" :aria-label="`${badges.expiredAccounts} 个账号需要重新登录`" />
-        </router-link>
-      </template>
+      <router-link v-for="item in NAV" :key="item.to" :to="item.to" class="item" active-class="active">
+        <el-icon :size="18"><component :is="item.icon" /></el-icon>
+        <span class="item-label">{{ item.label }}</span>
+        <span v-if="item.badge === 'todo' && badges.todo" class="count" :aria-label="`${badges.todo} 条内容等待处理`">{{ badges.todo }}</span>
+        <span v-if="item.badge === 'accounts' && badges.expiredAccounts" class="dot" :aria-label="`${badges.expiredAccounts} 个账号需要重新登录`" />
+      </router-link>
 
       <div class="me">
         <span class="avatar" aria-hidden="true">{{ me?.name?.slice(0, 1) }}</span>
@@ -45,19 +42,11 @@ import api, { clearToken } from '../api'
 import { badges, refreshBadges } from '../badges'
 
 const NAV = [
-  { label: '', items: [{ to: '/dashboard', label: '工作台', icon: House }] },
-  {
-    label: '内容',
-    // 发布记录在内容详情里看，不单独设页面
-    items: [{ to: '/contents', label: '内容管理', icon: Document, badge: 'todo' }],
-  },
-  {
-    label: '设置',
-    items: [
-      { to: '/accounts', label: '账号管理', icon: User, badge: 'accounts' },
-      { to: '/categories', label: '分类与绑定', icon: FolderOpened },
-    ],
-  },
+  { to: '/dashboard', label: '工作台', icon: House },
+  // 发布记录在内容详情里看，不单独设页面
+  { to: '/contents', label: '内容管理', icon: Document, badge: 'todo' },
+  { to: '/accounts', label: '账号管理', icon: User, badge: 'accounts' },
+  { to: '/categories', label: '分类管理', icon: FolderOpened },
 ]
 
 const route = useRoute()
@@ -131,11 +120,6 @@ function logout() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.group {
-  padding: 14px 12px 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 .item {
   display: flex;
