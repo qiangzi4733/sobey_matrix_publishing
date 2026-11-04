@@ -1,13 +1,14 @@
 <template>
   <div>
-    <PageHeader title="分类管理" description="内容建在哪个分类，就发到这个分类绑定的账号。下级分类不沿用上级的绑定。">
+    <PageHeader title="分类管理">
       <el-button type="primary" :icon="Plus" @click="openDialog(null)">新建分类</el-button>
     </PageHeader>
 
     <section class="tree-panel mp-panel" aria-label="分类列表">
       <div class="tree-head">
         <span>分类名称</span>
-        <span>发布到</span>
+        <span class="time-col">创建时间</span>
+        <span>发布渠道和账号</span>
         <span class="count-col">内容数量</span>
         <span class="ops-col">操作</span>
       </div>
@@ -22,17 +23,17 @@
         <template #default="{ data }">
           <span class="row">
             <span class="row-name">{{ data.name }}</span>
+            <span class="time-col">{{ formatTime(data.created_at, true) }}</span>
             <span class="row-account">
               <span v-if="data.account" class="chip" :class="{ warn: data.account.status !== 'active' }">
                 <PlatformIcon :platform="data.account.platform" :size="14" />
                 {{ data.account.display_name }}
                 <template v-if="data.account.status !== 'active'"> · 需重新登录</template>
               </span>
-              <span v-else class="tip">未绑定 · 不能在这里新建内容</span>
+              <span v-else class="tip">未绑定</span>
             </span>
             <span class="count-col">{{ data.post_count }}</span>
             <span class="ops-col" @click.stop>
-              <el-button link type="primary" @click="openDialog(null, data.id)">加下级</el-button>
               <el-button link type="primary" @click="openDialog(data)">修改</el-button>
               <el-button link type="danger" @click="remove(data)">删除</el-button>
             </span>
@@ -58,7 +59,7 @@
           />
         </el-form-item>
         <el-form-item label="分类名称" required>
-          <el-input v-model="form.name" maxlength="50" placeholder="如：体育学院、校报专栏" />
+          <el-input v-model="form.name" maxlength="50" placeholder="请输入分类名称" />
         </el-form-item>
         <el-form-item label="发布渠道">
           <div class="channels" role="radiogroup" aria-label="发布渠道">
@@ -117,7 +118,7 @@ import api from '../api'
 import { buildTree } from '../categories'
 import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
-import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
+import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS, formatTime } from '../platforms'
 
 const route = useRoute()
 const router = useRouter()
@@ -157,11 +158,11 @@ const parentTree = computed(() => {
   return mark(tree.value, false)
 })
 
-async function openDialog(row, parentId = null) {
+async function openDialog(row) {
   editing.value = row
   Object.assign(form, {
     name: row?.name ?? '',
-    parentId: row ? row.parent_id : parentId,
+    parentId: row?.parent_id ?? null,
     platform: row?.account?.platform ?? null,
     accountId: row?.account?.id ?? null,
   })
@@ -245,15 +246,20 @@ onMounted(async () => {
   flex: 1;
   min-width: 0;
 }
-.tree-head > :nth-child(2),
+.tree-head > :nth-child(3),
 .row-account {
   flex: 0 0 280px;
+}
+.time-col {
+  flex: 0 0 160px;
+  color: var(--el-text-color-regular);
+  font-variant-numeric: tabular-nums;
 }
 .count-col {
   flex: 0 0 64px;
 }
 .ops-col {
-  flex: 0 0 150px;
+  flex: 0 0 90px;
   text-align: right;
 }
 .ops-col .el-button + .el-button {

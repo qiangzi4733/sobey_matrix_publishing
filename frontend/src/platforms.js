@@ -95,11 +95,14 @@ const BEIJING = new Intl.DateTimeFormat('zh-CN', {
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
+  second: '2-digit',
   hourCycle: 'h23',
 })
 
-export const formatTime = (value) => {
+// seconds：列表里的创建时间要精确到秒（如 2026-08-04 14:43:17）
+export const formatTime = (value, seconds = false) => {
   if (!value) return '-'
   const part = Object.fromEntries(BEIJING.formatToParts(new Date(value)).map((p) => [p.type, p.value]))
-  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`
+  const time = `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`
+  return seconds ? `${time}:${part.second}` : time
 }
