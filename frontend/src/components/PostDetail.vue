@@ -608,4 +608,18 @@ dd {
 .spacer {
   flex: 1;
 }
+@media (max-width: 768px) {
+  .head,
+  .body,
+  .foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .info {
+    flex-direction: column;
+  }
+  .video {
+    width: 100%;
+  }
+}
 </style>

@@ -46,4 +46,15 @@ p {
   align-items: center;
   gap: 10px;
 }
+@media (max-width: 768px) {
+  .page-header {
+    margin-bottom: 16px;
+  }
+  h1 {
+    font-size: 20px;
+  }
+  .actions {
+    width: 100%;
+  }
+}
 </style>
