@@ -191,6 +191,7 @@ class CategoryOut(BaseModel):
     account: PostAccountOut | None
     # 直接挂在这个分类下的内容数（不含子分类）
     post_count: int
+    created_at: datetime
 
 
 class WechatAuthorizeOut(BaseModel):

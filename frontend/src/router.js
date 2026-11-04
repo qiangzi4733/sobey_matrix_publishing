@@ -5,6 +5,7 @@ import Login from './views/Login.vue'
 import Accounts from './views/Accounts.vue'
 import WechatMpCallback from './views/WechatMpCallback.vue'
 import Tasks from './views/Tasks.vue'
+import Categories from './views/Categories.vue'
 import Contents from './views/Contents.vue'
 
 const router = createRouter({
@@ -19,6 +20,7 @@ const router = createRouter({
         { path: 'accounts', name: 'accounts', component: Accounts },
         { path: 'accounts/wechat-mp/callback', name: 'wechat-mp-callback', component: WechatMpCallback },
         { path: 'contents', name: 'contents', component: Contents },
+        { path: 'categories', name: 'categories', component: Categories },
         // 旧地址：发布改成在内容管理里选好分类后新建
         { path: 'publish', redirect: { name: 'contents' } },
         { path: 'publish-article', redirect: { name: 'contents' } },

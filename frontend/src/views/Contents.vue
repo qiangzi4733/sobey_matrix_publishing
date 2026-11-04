@@ -3,7 +3,7 @@
     <div class="side">
       <div class="side-head">
         <span>分类</span>
-        <el-button link type="primary" @click="managerVisible = true">管理</el-button>
+        <el-button link type="primary" @click="router.push({ name: 'categories' })">管理</el-button>
       </div>
       <el-tree
         :data="sideTree"
@@ -48,7 +48,7 @@
         </span>
         <span v-else class="create">
           <span class="tip">{{ current ? '这个分类还没有绑定发布账号' : '选择左侧已绑定账号的分类后才能发布' }}</span>
-          <el-button @click="managerVisible = true">去设置</el-button>
+          <el-button @click="goSetup">去设置</el-button>
         </span>
       </div>
       <el-table :data="posts" empty-text="没有内容">
@@ -187,10 +187,6 @@
       <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
     </el-drawer>
 
-    <el-dialog v-model="managerVisible" title="分类管理" width="760px">
-      <CategoryManager :categories="categories" @changed="loadCategories" />
-    </el-dialog>
-
     <el-dialog v-model="copyVisible" title="复制到分类" width="440px">
       <p>《{{ copying?.title }}》复制到：</p>
       <el-tree-select
@@ -257,7 +253,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
-import CategoryManager from '../components/CategoryManager.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryKind, categoryPath } from '../categories'
@@ -272,7 +267,6 @@ const categories = ref([])
 // 左侧选中的分类：'all' 全部、'none' 未分类，其余是分类 id（包含下级分类的内容）
 const category = ref('all')
 const mine = ref(false)
-const managerVisible = ref(false)
 const copyVisible = ref(false)
 const copying = ref(null)
 const copyTarget = ref(null)
@@ -332,6 +326,11 @@ async function loadCategories() {
   if (typeof category.value === 'number' && !categories.value.some((c) => c.id === category.value)) {
     pickCategory('all')
   }
+}
+
+// 选中的是没绑定账号的分类时，直接打开它的修改窗口去绑定
+function goSetup() {
+  router.push({ name: 'categories', query: current.value ? { edit: current.value.id } : {} })
 }
 
 function pickCategory(key) {

@@ -68,6 +68,7 @@ def _out(category: Category, post_count: int) -> CategoryOut:
         name=category.name,
         account=PostAccountOut.model_validate(category.account) if category.account else None,
         post_count=post_count,
+        created_at=category.created_at,
     )
 
 

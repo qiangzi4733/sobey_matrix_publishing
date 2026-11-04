@@ -16,6 +16,9 @@
           <span v-else class="tip">未绑定</span>
         </template>
       </el-table-column>
+      <el-table-column label="创建时间" width="160">
+        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+      </el-table-column>
       <el-table-column prop="post_count" label="内容数" width="80" />
       <el-table-column label="操作" width="200">
         <template #default="{ row }">
@@ -71,21 +74,23 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
 import { buildTree } from '../categories'
-import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
-import PlatformIcon from './PlatformIcon.vue'
+import PlatformIcon from '../components/PlatformIcon.vue'
+import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS, formatTime } from '../platforms'
 
-const props = defineProps({ categories: { type: Array, required: true } })
-const emit = defineEmits(['changed'])
+const route = useRoute()
+const router = useRouter()
 
 // 快手还不能发布，渠道下拉里列出但不能选
 const PUBLISHABLE = [...VIDEO_PLATFORMS, ...ARTICLE_PLATFORMS]
 
-const tree = computed(() => buildTree(props.categories))
+const categories = ref([])
+const tree = computed(() => buildTree(categories.value))
 const editVisible = ref(false)
 const editing = ref(null)
 const busy = ref(false)
@@ -145,7 +150,7 @@ async function save() {
     else await api.post('/categories', body)
     editVisible.value = false
     ElMessage.success('已保存')
-    emit('changed')
+    await load()
   } finally {
     busy.value = false
   }
@@ -155,8 +160,22 @@ async function remove(row) {
   await ElMessageBox.confirm(`删除分类「${row.name}」？`, '删除', { type: 'warning' })
   await api.delete(`/categories/${row.id}`)
   ElMessage.success('已删除')
-  emit('changed')
+  await load()
 }
+
+async function load() {
+  categories.value = (await api.get('/categories')).data
+}
+
+onMounted(async () => {
+  await load()
+  // 从内容管理的「去设置」过来时，直接打开那个分类的修改窗口
+  const row = categories.value.find((c) => c.id === Number(route.query.edit))
+  if (row) {
+    router.replace({ query: {} })
+    await openEdit(row)
+  }
+})
 </script>
 
 <style scoped>
