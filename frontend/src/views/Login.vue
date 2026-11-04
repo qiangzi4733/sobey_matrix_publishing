@@ -238,28 +238,4 @@ h2 {
   margin: 16px 0 0;
   text-align: center;
 }
-/* 手机上介绍区收成一条，表单在前面一屏就能看到 */
-@media (max-width: 768px) {
-  .intro {
-    flex-basis: 100%;
-    gap: 16px;
-    padding: 24px;
-  }
-  .pitch {
-    margin-top: 0;
-  }
-  h1 {
-    font-size: 22px;
-    margin-bottom: 8px;
-  }
-  .pitch p {
-    font-size: 14px;
-  }
-  .platforms {
-    display: none;
-  }
-  .form-side {
-    padding: 24px 16px 40px;
-  }
-}
 </style>

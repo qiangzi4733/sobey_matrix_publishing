@@ -438,15 +438,4 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
 }
-@media (max-width: 768px) {
-  .paper-body {
-    padding: 20px 16px 32px;
-  }
-  .title-input {
-    font-size: 22px;
-  }
-  .toolbar {
-    position: static;
-  }
-}
 </style>

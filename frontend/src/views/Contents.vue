@@ -32,7 +32,7 @@
     </el-dropdown>
   </PageHeader>
   <div class="page">
-    <div v-if="!isMobile" class="side mp-panel">
+    <div class="side mp-panel">
       <div class="side-head">
         <span>分类</span>
         <el-button link type="primary" @click="router.push({ name: 'categories' })">管理</el-button>
@@ -59,19 +59,6 @@
       </el-tree>
     </div>
     <div class="main mp-panel">
-      <!-- 手机上没有左侧分类树，用下拉选分类 -->
-      <div v-if="isMobile" class="mobile-filter">
-        <el-tree-select
-          :model-value="category"
-          :data="sideTree"
-          :props="{ label: 'label', children: 'children' }"
-          node-key="key"
-          check-strictly
-          default-expand-all
-          aria-label="按分类筛选"
-          @update:model-value="pickCategory"
-        />
-      </div>
       <div class="tabs" role="tablist" aria-label="按状态筛选">
         <template v-for="tab in POST_TABS" :key="tab.key">
           <span v-if="tab.key === 'draft' || tab.key === 'to_publish'" class="tab-sep" aria-hidden="true" />
@@ -88,29 +75,7 @@
           </button>
         </template>
       </div>
-      <ul v-if="isMobile" class="cards">
-        <li v-for="row in shownPosts" :key="row.id" class="card" @click="openDetail(row)">
-          <div class="content-cell">
-            <img v-if="row.cover_url" :src="row.cover_url" class="thumb" :class="row.kind" alt="" />
-            <span v-else class="thumb placeholder" :class="row.kind" aria-hidden="true">
-              <el-icon :size="16"><VideoPlay v-if="row.kind === 'video'" /><Document v-else /></el-icon>
-            </span>
-            <span class="content-text">
-              <span class="title">{{ row.title }}</span>
-              <span class="tip with-icon">
-                <PlatformIcon v-if="row.account" :platform="row.account.platform" :size="14" />
-                {{ row.account?.display_name ?? row.account_name ?? '未选择账号' }} · {{ rowTime(row).label }} {{ rowTime(row).value }}
-              </span>
-            </span>
-            <StatusTag :tone="POST_STATUS[postStatus(row)].tone" class="card-status">{{ postStatusLabel(row) }}</StatusTag>
-          </div>
-          <el-button v-if="primaryAction(row)" :type="primaryAction(row).type" class="card-action" @click.stop="primaryAction(row).run(row)">
-            {{ primaryAction(row).label }}
-          </el-button>
-        </li>
-        <li v-if="!shownPosts.length" class="cards-empty tip">没有内容</li>
-      </ul>
-      <el-table v-else :data="shownPosts" empty-text="没有内容" @row-click="openDetail" row-class-name="row">
+      <el-table :data="shownPosts" empty-text="没有内容" @row-click="openDetail" row-class-name="row">
         <el-table-column label="内容" min-width="260">
           <template #default="{ row }">
             <div class="content-cell">
@@ -175,7 +140,7 @@
       </el-table>
     </div>
 
-    <el-drawer v-model="detailVisible" :with-header="false" :size="isMobile ? '100%' : 'min(720px, 92%)'" class="detail-drawer">
+    <el-drawer v-model="detailVisible" :with-header="false" size="min(720px, 92%)" class="detail-drawer">
       <PostDetail
         v-if="detail"
         :post="detail"
@@ -279,11 +244,9 @@ import StatusTag from '../components/StatusTag.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryKind, categoryPath } from '../categories'
 import { refreshBadges } from '../badges'
-import { useMobile } from '../useMobile'
 import { PLATFORMS, POST_STATUS, POST_TABS, formatTime, isEditable, postStatus, postStatusLabel } from '../platforms'
 
 const route = useRoute()
-const isMobile = useMobile()
 const router = useRouter()
 const filter = ref(route.query.status ?? 'pending')
 const posts = ref([])
@@ -635,11 +598,6 @@ onMounted(async () => {
   padding: 10px 8px;
   border-bottom: 1px solid var(--mp-panel-border);
   overflow-x: auto;
-  /* 窄屏时左右滑动，不显示滚动条 */
-  scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar {
-  display: none;
 }
 .tab {
   flex: none;
@@ -803,45 +761,6 @@ onMounted(async () => {
   margin-top: 4px;
   padding: 10px 16px 6px;
   border-top: 1px solid var(--mp-panel-border);
-}
-.mobile-filter {
-  padding: 12px 12px 0;
-}
-.mobile-filter :deep(.el-select) {
-  width: 100%;
-}
-.cards {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border-top: 1px solid var(--el-border-color-lighter);
-  cursor: pointer;
-}
-.card:first-child {
-  border-top: 0;
-}
-.card-status {
-  align-self: flex-start;
-  flex: none;
-}
-.card-action {
-  width: 100%;
-  height: 40px;
-}
-.cards-empty {
-  padding: 32px;
-  text-align: center;
-}
-@media (max-width: 768px) {
-  .search {
-    width: 100%;
-  }
 }
 </style>
 <style>

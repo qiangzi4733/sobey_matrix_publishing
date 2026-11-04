@@ -121,27 +121,4 @@ h1 {
 .shell :deep(.section .el-form-item) {
   margin-bottom: 0;
 }
-@media (max-width: 768px) {
-  .bar {
-    padding: 10px 12px;
-  }
-  .heading {
-    min-width: 0;
-  }
-  .actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
-  .body {
-    padding: 12px 12px 32px;
-    gap: 12px;
-  }
-  .aside {
-    position: static;
-    max-width: none;
-  }
-  .shell :deep(.section) {
-    padding: 16px;
-  }
-}
 </style>

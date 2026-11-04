@@ -389,16 +389,4 @@ dd {
   text-align: center;
   color: var(--el-text-color-secondary);
 }
-@media (max-width: 768px) {
-  .adds {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-  .add {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 12px;
-  }
-}
 </style>

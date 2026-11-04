@@ -1,13 +1,6 @@
 <template>
   <div class="layout">
-    <!-- 手机上导航收起来，从顶栏的菜单按钮打开 -->
-    <header class="topbar">
-      <el-button text :icon="Menu" aria-label="打开菜单" class="menu-btn" @click="navOpen = true" />
-      <span class="topbar-title">{{ route.meta.title ?? '矩阵分发' }}</span>
-      <span v-if="badges.todo || badges.expiredAccounts" class="dot" aria-label="有需要处理的事" />
-    </header>
-    <div v-if="navOpen" class="backdrop" @click="navOpen = false" />
-    <nav class="aside" :class="{ open: navOpen }" aria-label="主导航">
+    <nav class="aside" aria-label="主导航">
       <div class="brand">
         <span class="logo" aria-hidden="true">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
@@ -46,7 +39,7 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Document, FolderOpened, House, Menu, User } from '@element-plus/icons-vue'
+import { Document, FolderOpened, House, User } from '@element-plus/icons-vue'
 
 import api, { clearToken } from '../api'
 import { badges, refreshBadges } from '../badges'
@@ -70,7 +63,6 @@ const NAV = [
 const route = useRoute()
 const router = useRouter()
 const me = ref(null)
-const navOpen = ref(false)
 
 onMounted(async () => {
   me.value = (await api.get('/auth/me')).data
@@ -79,7 +71,6 @@ onMounted(async () => {
 watch(
   () => route.name,
   (name) => {
-    navOpen.value = false
     if (name !== 'contents' && name !== 'accounts') refreshBadges()
   },
   { immediate: true },
@@ -213,58 +204,5 @@ function logout() {
   min-width: 0;
   box-sizing: border-box;
   padding: 24px 28px 40px;
-}
-.topbar,
-.backdrop {
-  display: none;
-}
-@media (max-width: 768px) {
-  .layout {
-    flex-direction: column;
-  }
-  .topbar {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 52px;
-    padding: 0 12px 0 4px;
-    background: #fff;
-    border-bottom: 1px solid var(--mp-panel-border);
-  }
-  .menu-btn {
-    width: 44px;
-    height: 44px;
-    font-size: 20px;
-  }
-  .topbar-title {
-    flex: 1;
-    font-weight: 600;
-  }
-  .aside {
-    position: fixed;
-    left: 0;
-    top: 0;
-    z-index: 2001;
-    width: 260px;
-    transform: translateX(-100%);
-    transition: transform 0.2s;
-  }
-  .aside.open {
-    transform: none;
-    box-shadow: 0 0 24px rgba(0, 0, 0, 0.15);
-  }
-  .backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 2000;
-    background: rgba(0, 0, 0, 0.35);
-  }
-  .main {
-    padding: 16px 16px 32px;
-  }
 }
 </style>

@@ -278,16 +278,4 @@ h2 {
   align-items: center;
   gap: 4px;
 }
-@media (max-width: 768px) {
-  .todos {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-  .todo {
-    padding: 14px;
-  }
-  .todo-count {
-    font-size: 26px;
-  }
-}
 </style>

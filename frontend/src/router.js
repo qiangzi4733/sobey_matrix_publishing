@@ -17,11 +17,11 @@ const router = createRouter({
       component: Layout,
       redirect: '/dashboard',
       children: [
-        { path: 'dashboard', name: 'dashboard', component: Dashboard, meta: { title: '工作台' } },
-        { path: 'accounts', name: 'accounts', component: Accounts, meta: { title: '账号管理' } },
+        { path: 'dashboard', name: 'dashboard', component: Dashboard },
+        { path: 'accounts', name: 'accounts', component: Accounts },
         { path: 'accounts/wechat-mp/callback', name: 'wechat-mp-callback', component: WechatMpCallback },
-        { path: 'contents', name: 'contents', component: Contents, meta: { title: '内容管理' } },
-        { path: 'categories', name: 'categories', component: Categories, meta: { title: '分类与绑定' } },
+        { path: 'contents', name: 'contents', component: Contents },
+        { path: 'categories', name: 'categories', component: Categories },
         // 旧地址：发布改成在内容管理里选好分类后新建
         { path: 'publish', redirect: { name: 'contents' } },
         { path: 'publish-article', redirect: { name: 'contents' } },

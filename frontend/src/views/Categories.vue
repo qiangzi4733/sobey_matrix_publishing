@@ -31,7 +31,7 @@
                   {{ data.account.display_name }}
                   <template v-if="data.account.status !== 'active'"> · 需重新登录</template>
                 </span>
-                <span v-else class="tip">未绑定<span class="unbound-hint"> · 不能在这里新建内容</span></span>
+                <span v-else class="tip">未绑定 · 不能在这里新建内容</span>
               </span>
               <span class="count-col">{{ data.post_count }}</span>
               <span class="row-ops" @click.stop>
@@ -43,7 +43,7 @@
         <p v-else class="empty tip">还没有分类，点右上角「新建一级分类」</p>
       </section>
 
-      <aside ref="panel" class="edit-panel mp-panel" aria-label="编辑分类">
+      <aside class="edit-panel mp-panel" aria-label="编辑分类">
         <template v-if="mode">
           <div class="edit-head">
             <span class="tip">{{ mode === 'edit' ? parentLabel(editing.parent_id) : '新建分类' }}</span>
@@ -127,14 +127,11 @@ import { FolderOpened, Plus } from '@element-plus/icons-vue'
 
 import api from '../api'
 import { buildTree } from '../categories'
-import { useMobile } from '../useMobile'
 import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
 import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS } from '../platforms'
 
 const route = useRoute()
-const isMobile = useMobile()
-const panel = ref(null)
 const router = useRouter()
 
 // 快手还不能发布，渠道下拉里列出但不能选
@@ -188,19 +185,12 @@ async function openEdit(row, parentId = null) {
   mode.value = row ? 'edit' : 'create'
 }
 
-async function select(id) {
-  await openEdit(categories.value.find((c) => c.id === id))
-  revealPanel()
+function select(id) {
+  openEdit(categories.value.find((c) => c.id === id))
 }
 
-async function startCreate(parentId) {
-  await openEdit(null, parentId)
-  revealPanel()
-}
-
-// 手机上编辑面板排在分类树下面，点了之后滚过去
-function revealPanel() {
-  if (isMobile.value) panel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+function startCreate(parentId) {
+  openEdit(null, parentId)
 }
 
 function cancel() {
@@ -472,25 +462,5 @@ h2 {
 .edit-empty p {
   margin: 0;
   line-height: 1.7;
-}
-@media (max-width: 768px) {
-  .tree-head {
-    display: none;
-  }
-  .row-account {
-    flex-basis: 120px;
-  }
-  .count-col {
-    display: none;
-  }
-  .edit-panel {
-    position: static;
-    max-width: none;
-  }
-}
-@media (max-width: 768px) {
-  .unbound-hint {
-    display: none;
-  }
 }
 </style>
