@@ -1,82 +1,83 @@
 <template>
   <div>
-    <PageHeader title="账号管理" description="抖音和视频号每 6 小时自动检测一次登录状态">
-      <el-dropdown @command="addAccount">
-        <el-button type="primary">添加账号</el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-for="item in ADD_OPTIONS" :key="item.platform" :command="item.platform" :disabled="item.disabled">
-              <span class="with-icon"><PlatformIcon :platform="item.platform" />{{ item.label }}</span>
-            </el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-    </PageHeader>
+    <PageHeader title="账号管理" description="抖音和视频号每 6 小时自动检测一次登录状态" />
+
+    <section class="adds" aria-label="添加账号">
+      <button
+        v-for="item in ADD_OPTIONS"
+        :key="item.platform"
+        type="button"
+        class="add"
+        :disabled="item.disabled"
+        @click="addAccount(item.platform)"
+      >
+        <PlatformIcon :platform="item.platform" :size="32" />
+        <span class="add-text">
+          <span class="add-title">添加{{ PLATFORMS[item.platform] }}</span>
+          <span class="tip">{{ item.how }}</span>
+        </span>
+      </button>
+    </section>
 
     <el-alert
       v-if="invalidCount"
-      type="warning"
+      type="error"
       show-icon
       :closable="false"
       class="invalid-alert"
       :title="`有 ${invalidCount} 个账号登录已失效，发布到这些账号会失败，请重新扫码或授权`"
     />
 
-    <div class="mp-panel table-panel">
-    <div class="toolbar">
-      <el-radio-group v-model="platform">
-        <el-radio-button value="">全部</el-radio-button>
-        <el-radio-button v-for="(label, key) in PLATFORMS" :key="key" :value="key">
-          <span class="with-icon"><PlatformIcon :platform="key" />{{ label }}</span>
+    <div v-if="accounts.length" class="toolbar">
+      <el-radio-group v-model="platform" size="small">
+        <el-radio-button value="">全部 {{ accounts.length }}</el-radio-button>
+        <el-radio-button v-for="p in platformsWithAccounts" :key="p" :value="p">
+          <span class="with-icon"><PlatformIcon :platform="p" :size="14" />{{ PLATFORMS[p] }} {{ countOf(p) }}</span>
         </el-radio-button>
       </el-radio-group>
     </div>
-    <el-table :data="shown" v-loading="loading" empty-text="还没有账号，点击右上角添加">
-      <el-table-column label="平台" width="130">
-        <template #default="{ row }">
-          <span class="with-icon"><PlatformIcon :platform="row.platform" :size="18" />{{ PLATFORMS[row.platform] }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="名称" min-width="160">
-        <template #default="{ row }">
-          <div class="name">
+
+    <div v-loading="loading" class="cards">
+      <article v-for="row in shown" :key="row.id" class="card mp-panel" :class="{ expired: row.status !== 'active' }">
+        <div class="card-head">
+          <span class="avatar-wrap">
             <!-- 微信头像有防盗链，需要不带 Referer -->
             <img v-if="row.avatar_url" :src="row.avatar_url" referrerpolicy="no-referrer" class="avatar" alt="" />
-            <span>{{ row.display_name }}</span>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column prop="external_id" label="平台账号 ID" min-width="160" show-overflow-tooltip />
-      <el-table-column label="状态" width="110">
-        <template #default="{ row }">
+            <span v-else class="avatar initial" aria-hidden="true">{{ row.display_name.slice(0, 1) }}</span>
+            <PlatformIcon :platform="row.platform" :size="18" class="avatar-badge" />
+          </span>
+          <span class="card-title">
+            <span class="name">{{ row.display_name }}</span>
+            <span class="tip ellipsis" :title="row.external_id">{{ PLATFORMS[row.platform] }} · {{ row.external_id }}</span>
+          </span>
           <StatusTag :tone="STATUS[row.status].tone">{{ STATUS[row.status].label }}</StatusTag>
-        </template>
-      </el-table-column>
-      <el-table-column label="上次检测" width="170">
-        <template #default="{ row }">{{ formatTime(row.last_checked_at) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
-        <template #default="{ row }">
+        </div>
+        <dl class="facts">
+          <div>
+            <dt>{{ QR_LOGIN_PLATFORMS.includes(row.platform) ? '上次检测' : '授权时间' }}</dt>
+            <dd>{{ formatTime(QR_LOGIN_PLATFORMS.includes(row.platform) ? row.last_checked_at : row.created_at) }}</dd>
+          </div>
+          <div>
+            <dt>绑定分类</dt>
+            <dd class="ellipsis" :title="boundNames(row).join('、')">{{ boundNames(row).join('、') || '未绑定' }}</dd>
+          </div>
+        </dl>
+        <p v-if="row.status !== 'active' && impact[row.id]" class="impact">{{ impact[row.id] }}</p>
+        <div class="card-actions">
           <template v-if="QR_LOGIN_PLATFORMS.includes(row.platform)">
-            <el-button v-if="row.status !== 'active'" link type="warning" @click="relogin(row)">
-              重新扫码
-            </el-button>
-            <el-button v-else link type="primary" :loading="checking.has(row.id)" @click="check(row)">
-              {{ checking.has(row.id) ? '检测中' : '检测' }}
+            <el-button v-if="row.status !== 'active'" type="danger" @click="relogin(row)">重新扫码</el-button>
+            <el-button v-else :loading="checking.has(row.id)" @click="check(row)">
+              {{ checking.has(row.id) ? '检测中（约 1 分钟）' : '立即检测' }}
             </el-button>
           </template>
-          <el-button
-            v-if="row.platform === 'wechat_mp' && row.status !== 'active'"
-            link
-            type="warning"
-            @click="addAccount('wechat_mp')"
-          >
+          <el-button v-else-if="row.platform === 'wechat_mp' && row.status !== 'active'" type="danger" @click="addAccount('wechat_mp')">
             重新授权
           </el-button>
-          <el-button link type="danger" @click="remove(row)">移除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+          <span class="spacer" />
+          <el-button text type="danger" @click="remove(row)">移除</el-button>
+        </div>
+      </article>
+      <div v-if="!loading && !accounts.length" class="empty mp-panel">还没有账号，从上面选一个平台添加</div>
     </div>
 
     <QrLoginDialog
@@ -108,13 +109,16 @@ const STATUS = {
 }
 
 const ADD_OPTIONS = [
-  { platform: 'channels', label: '扫码登录视频号' },
-  { platform: 'wechat_mp', label: '授权微信公众号' },
-  { platform: 'douyin', label: '扫码登录抖音' },
-  { platform: 'kuaishou', label: '授权快手（权限申请中）', disabled: true },
+  { platform: 'douyin', how: '手机扫码登录' },
+  { platform: 'channels', how: '微信扫码登录' },
+  { platform: 'wechat_mp', how: '管理员扫码授权' },
+  { platform: 'kuaishou', how: '权限申请中，暂未开放', disabled: true },
 ]
 
 const accounts = ref([])
+const categories = ref([])
+// 失效账号会影响哪些发布，提醒客户尽快处理；key 是账号 id
+const impact = reactive({})
 const platform = ref('')
 const loading = ref(false)
 // 检测要等服务器浏览器打开平台，约 1 分钟，允许同时检测多个
@@ -133,14 +137,34 @@ const shown = computed(() =>
     .sort((a, b) => (a.status === 'active') - (b.status === 'active') || a.id - b.id),
 )
 
+const platformsWithAccounts = computed(() => Object.keys(PLATFORMS).filter((p) => accounts.value.some((a) => a.platform === p)))
+const countOf = (p) => accounts.value.filter((a) => a.platform === p).length
+const boundNames = (account) => categories.value.filter((c) => c.account?.id === account.id).map((c) => c.name)
+
 async function load() {
   loading.value = true
   try {
-    accounts.value = (await api.get('/accounts')).data
+    const [list, cats] = await Promise.all([api.get('/accounts'), api.get('/categories')])
+    accounts.value = list.data
+    categories.value = cats.data
     badges.expiredAccounts = accounts.value.filter((a) => a.status !== 'active').length
   } finally {
     loading.value = false
   }
+  loadImpact()
+}
+
+async function loadImpact() {
+  for (const key of Object.keys(impact)) delete impact[key]
+  const expired = accounts.value.filter((a) => a.status !== 'active')
+  const usages = await Promise.all(expired.map((a) => api.get(`/accounts/${a.id}/usage`)))
+  expired.forEach((a, i) => {
+    const u = usages[i].data
+    const parts = []
+    if (u.pending_tasks) parts.push(`${u.pending_tasks} 个排队或等待定时的发布`)
+    if (u.posts) parts.push(`${u.posts} 条还没发布的内容`)
+    if (parts.length) impact[a.id] = `有${parts.join('、')}要发到这个账号，请尽快重新登录。`
+  })
 }
 
 async function addAccount(command) {
@@ -204,28 +228,165 @@ onMounted(load)
 </script>
 
 <style scoped>
-.table-panel {
-  padding: 12px 16px;
+.tip {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
-.toolbar {
-  margin-bottom: 8px;
+.adds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.add {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px dashed #b9bfca;
+  border-radius: var(--mp-panel-radius);
+  background: #fff;
+  font: inherit;
+  color: var(--el-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.add:hover:not(:disabled) {
+  border-color: var(--el-color-primary);
+  background: #f5f8ff;
+}
+.add:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.add-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.add-title {
+  font-weight: 600;
 }
 .invalid-alert {
+  margin-bottom: 16px;
+}
+.toolbar {
   margin-bottom: 12px;
 }
 .with-icon {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  min-height: 80px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+}
+.card.expired {
+  border-color: #f8cfcb;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-wrap {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+}
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.avatar.initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dde3f0;
+  color: var(--mp-nav-active-fg);
+  font-size: 18px;
+  font-weight: 700;
+}
+.avatar-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  padding: 2px;
+  border-radius: 6px;
+  background: #fff;
+}
+.card-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .name {
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+dt {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+dd {
+  margin: 0;
+}
+.impact {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef0ef;
+  color: #7a1c14;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.card-actions {
+  margin-top: auto;
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+.spacer {
+  flex: 1;
+}
+.empty {
+  grid-column: 1 / -1;
+  padding: 32px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
 }
 </style>
