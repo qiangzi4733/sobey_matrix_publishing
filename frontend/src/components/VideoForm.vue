@@ -2,9 +2,17 @@
   <div>
     <el-alert v-if="reviewNote" :title="`退回原因：${reviewNote}`" type="warning" :closable="false" class="note" />
     <el-form :model="form" label-width="90px" @submit.prevent="submit(false)">
-      <!-- 先选账号：账号决定发到哪个平台，下面的字数限制、定时范围和专属配置都跟着平台变 -->
+      <el-form-item label="分类">{{ categoryPath(categories, category) || '未分类' }}</el-form-item>
+      <!-- 账号决定发到哪个平台，下面的字数限制、定时范围和专属配置都跟着平台变 -->
       <el-form-item label="发布账号" required>
-        <div class="accounts">
+        <div v-if="lockedId" class="locked">
+          <template v-if="lockedAccount">
+            <PlatformIcon :platform="lockedAccount.platform" /> {{ PLATFORMS[lockedAccount.platform] }} · {{ lockedAccount.display_name }}
+            <span v-if="lockedAccount.status !== 'active'" class="warn">（登录已失效，请先到「账号管理」重新登录）</span>
+          </template>
+          <span v-else class="warn">分类绑定的账号不能发布视频，请到分类管理修改</span>
+        </div>
+        <div v-else class="accounts">
           <div v-for="group in accountGroups" :key="group.platform" class="account-group">
             <span class="group-name"><PlatformIcon :platform="group.platform" /> {{ PLATFORMS[group.platform] }}</span>
             <el-radio-group v-model="form.accountId">
@@ -39,9 +47,6 @@
       <el-form-item label="话题">
         <el-select v-model="form.tags" multiple filterable allow-create default-first-option placeholder="输入后回车，不用加 #" style="width: 100%" />
       </el-form-item>
-      <el-form-item label="分类">
-        <CategorySelect v-model="form.categoryId" :categories="categories" style="width: 320px" />
-      </el-form-item>
       <el-form-item label="定时发布">
         <div>
           <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则立即发布" :disabled-date="(d) => d < startOfToday" />
@@ -69,8 +74,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import { categoryPath } from '../categories'
 import { PLATFORMS, VIDEO_PLATFORMS, VIDEO_RULES } from '../platforms'
-import CategorySelect from './CategorySelect.vue'
 import CoverUpload from './CoverUpload.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import DouyinOptions from './video-options/DouyinOptions.vue'
@@ -78,13 +83,13 @@ import DouyinOptions from './video-options/DouyinOptions.vue'
 // 各平台的专属配置表单，没有专属配置的平台不用登记
 const OPTION_FORMS = { douyin: DouyinOptions }
 
-// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，定时要重新选
 const props = defineProps({
   postId: { type: Number, default: null },
   copyFrom: { type: Number, default: null },
   categories: { type: Array, required: true },
-  // 新建时默认放到内容管理里当前选中的分类
-  defaultCategory: { type: Number, default: null },
+  // 新建、复制时放进的分类（绑定了账号）；修改时分类不能改，用内容自己的
+  categoryId: { type: Number, default: null },
 })
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
@@ -96,13 +101,15 @@ const accounts = ref([])
 const file = ref(null)
 const submitting = ref(false)
 const progress = ref(0)
+const category = ref(props.categoryId)
+// 分类决定的账号，客户不能改；为空是分类没绑定账号的老内容，客户自己选（规则和后端 posts._edit_account_id 一致）
+const lockedId = ref(null)
 // optionsPlatform：options 是按哪个平台填的，换到其他平台的账号时要清空
 const form = reactive({
   title: '',
   description: '',
   tags: [],
   coverUrl: '',
-  categoryId: props.defaultCategory,
   accountId: null,
   scheduledAt: null,
   options: {},
@@ -116,6 +123,7 @@ const accountGroups = computed(() =>
     (g) => g.accounts.length,
   ),
 )
+const lockedAccount = computed(() => accounts.value.find((a) => a.id === lockedId.value))
 const platformOf = (id) => accounts.value.find((a) => a.id === id)?.platform ?? null
 const platform = computed(() => platformOf(form.accountId))
 const rules = computed(() => VIDEO_RULES[platform.value])
@@ -176,12 +184,12 @@ async function submit(draft) {
   body.append('title', form.title)
   body.append('description', form.description)
   body.append('tags', form.tags.join(','))
-  if (form.accountId) body.append('account_id', form.accountId)
+  if (!postId) body.append('category_id', category.value)
+  else if (!lockedId.value && form.accountId) body.append('account_id', form.accountId)
   if (draft) body.append('draft', 'true')
   body.append('cover_url', form.coverUrl)
   // 没填的项不传，后端按未设置处理
   body.append('options', JSON.stringify(Object.fromEntries(Object.entries(form.options).filter(([, v]) => v))))
-  if (form.categoryId) body.append('category_id', form.categoryId)
   if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
   submitting.value = true
@@ -204,24 +212,38 @@ async function submit(draft) {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => VIDEO_PLATFORMS.includes(a.platform))
+  let post = null
   if (postId || copyFrom) {
-    const post = (await api.get(`/posts/${postId || copyFrom}`)).data
-    // 复制时沿用原分类、封面；专属配置在选了同平台的账号时沿用。原账号已移除时不知道配置属于哪个平台，丢掉
+    post = (await api.get(`/posts/${postId || copyFrom}`)).data
+    // 复制时沿用封面；专属配置发到同平台时沿用。原账号已移除时不知道配置属于哪个平台，丢掉
     Object.assign(form, {
       title: post.title,
       description: post.description,
       tags: post.tags,
       coverUrl: post.cover_url,
-      categoryId: post.category_id,
       options: post.account ? { ...post.options } : {},
       optionsPlatform: post.account?.platform ?? null,
     })
     videoUrl.value = post.video_url
     if (postId) {
+      category.value = post.category_id
       form.accountId = post.account?.id ?? null
       form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
       reviewNote.value = post.review_note || ''
       canDraft.value = post.review_status === 'draft'
+    }
+  }
+  // 草稿跟着分类当前的绑定；提交过的沿用原账号，原账号被移除了才用分类的
+  const bound = props.categories.find((c) => c.id === category.value)?.account?.id ?? null
+  if (!bound) lockedId.value = null
+  else if (postId && post.review_status !== 'draft' && post.account) lockedId.value = post.account.id
+  else lockedId.value = bound
+  if (lockedId.value) {
+    form.accountId = lockedId.value
+    // 发到别的平台，原来的专属配置用不上
+    if (form.optionsPlatform !== platformOf(lockedId.value)) {
+      form.options = {}
+      form.optionsPlatform = platformOf(lockedId.value)
     }
   }
   saved = snapshot()
@@ -234,6 +256,15 @@ onMounted(async () => {
 }
 .accounts {
   width: 100%;
+}
+.locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.warn {
+  color: var(--el-color-danger);
+  font-size: 12px;
 }
 .account-group {
   display: flex;

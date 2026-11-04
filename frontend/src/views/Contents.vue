@@ -13,7 +13,16 @@
         default-expand-all
         :expand-on-click-node="false"
         @node-click="(node) => pickCategory(node.key)"
-      />
+      >
+        <template #default="{ data }">
+          <span class="node">
+            <span class="node-name">{{ data.label }}</span>
+            <!-- 绑定的账号登录失效时在树上就提醒，免得提交时才发现 -->
+            <PlatformIcon v-if="data.account" :platform="data.account.platform" :size="14" :class="{ dim: data.account.status !== 'active' }" />
+            <span v-if="data.account && data.account.status !== 'active'" class="warn">需重新登录</span>
+          </span>
+        </template>
+      </el-tree>
     </div>
     <div class="main">
       <div class="toolbar">
@@ -31,14 +40,18 @@
           </el-radio-group>
           <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
         </span>
-        <span>
-          <el-button :disabled="!selected.length" @click="openMove">移到分类</el-button>
-          <el-button type="primary" @click="openForm('video')">发布视频</el-button>
-          <el-button type="primary" @click="openForm('article')">发布图文</el-button>
+        <!-- 只有绑定了账号的分类能新建，账号决定发视频还是图文 -->
+        <span v-if="currentKind" class="create">
+          <span class="tip"><PlatformIcon :platform="current.account.platform" :size="14" /> 发到 {{ current.account.display_name }}</span>
+          <el-button v-if="currentKind === 'video'" type="primary" @click="openForm('video')">发布视频</el-button>
+          <el-button v-else type="primary" @click="openForm('article')">发布图文</el-button>
+        </span>
+        <span v-else class="create">
+          <span class="tip">{{ current ? '这个分类还没有绑定发布账号' : '选择左侧已绑定账号的分类后才能发布' }}</span>
+          <el-button @click="managerVisible = true">去设置</el-button>
         </span>
       </div>
-      <el-table :data="posts" empty-text="没有内容" @selection-change="(rows) => (selected = rows)">
-        <el-table-column type="selection" width="40" />
+      <el-table :data="posts" empty-text="没有内容">
         <el-table-column label="标题" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag size="small" type="info" class="kind">{{ row.kind === 'article' ? '图文' : '视频' }}</el-tag>
@@ -148,7 +161,7 @@
         <div class="actions">
           <el-button v-if="detail.review_status === 'approved' && !detail.publish_status" type="primary" @click="openPublish(detail)">发布</el-button>
           <el-button v-if="isEditable(detail)" @click="edit(detail)">修改</el-button>
-          <el-button @click="copy(detail)">复制到其他账号</el-button>
+          <el-button @click="copy(detail)">复制</el-button>
         </div>
       </template>
     </el-drawer>
@@ -162,7 +175,7 @@
       :before-close="beforeFormClose"
       @closed="resetForm"
     >
-      <VideoForm v-if="videoFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :default-category="defaultCategory" @saved="formSaved" @cancel="closeForm" />
+      <VideoForm v-if="videoFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
     </el-dialog>
     <el-drawer
       v-model="articleFormVisible"
@@ -171,20 +184,33 @@
       :before-close="beforeFormClose"
       @closed="resetForm"
     >
-      <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :default-category="defaultCategory" @saved="formSaved" @cancel="closeForm" />
+      <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
     </el-drawer>
 
-    <el-dialog v-model="managerVisible" title="分类管理" width="640px">
+    <el-dialog v-model="managerVisible" title="分类管理" width="760px">
       <CategoryManager :categories="categories" @changed="loadCategories" />
     </el-dialog>
 
-    <el-dialog v-model="moveVisible" title="移到分类" width="440px">
-      <p>把选中的 {{ selected.length }} 条内容移到：</p>
-      <CategorySelect v-model="moveTarget" :categories="categories" placeholder="未分类" />
-      <div class="tip move-tip">只改变归类，不影响审核和发布状态</div>
+    <el-dialog v-model="copyVisible" title="复制到分类" width="440px">
+      <p>《{{ copying?.title }}》复制到：</p>
+      <el-tree-select
+        v-model="copyTarget"
+        :data="copyTree"
+        :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
+        node-key="id"
+        check-strictly
+        default-expand-all
+        placeholder="选择分类"
+        style="width: 100%"
+      >
+        <template #default="{ data }">
+          {{ data.label }}<span v-if="data.account" class="tip">（{{ PLATFORMS[data.account.platform] }} · {{ data.account.display_name }}）</span>
+        </template>
+      </el-tree-select>
+      <div class="tip copy-tip">发到目标分类绑定的账号；{{ copying?.kind === 'article' ? '图文只能复制到绑定了公众号的分类' : '视频只能复制到绑定了视频渠道的分类' }}</div>
       <template #footer>
-        <el-button @click="moveVisible = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="move">确定</el-button>
+        <el-button @click="copyVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmCopy">下一步</el-button>
       </template>
     </el-dialog>
 
@@ -232,10 +258,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
 import CategoryManager from '../components/CategoryManager.vue'
-import CategorySelect from '../components/CategorySelect.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
 import VideoForm from '../components/VideoForm.vue'
-import { buildTree, categoryPath } from '../categories'
+import { buildTree, categoryKind, categoryPath } from '../categories'
 import { cleanHtml } from '../html'
 import { PLATFORMS, PUBLISH_STATUS, REVIEW_STATUS, VIDEO_OPTION_LABELS, formatTime, isEditable } from '../platforms'
 
@@ -247,10 +272,10 @@ const categories = ref([])
 // 左侧选中的分类：'all' 全部、'none' 未分类，其余是分类 id（包含下级分类的内容）
 const category = ref('all')
 const mine = ref(false)
-const selected = ref([])
 const managerVisible = ref(false)
-const moveVisible = ref(false)
-const moveTarget = ref(null)
+const copyVisible = ref(false)
+const copying = ref(null)
+const copyTarget = ref(null)
 const detail = ref(null)
 const detailVisible = ref(false)
 const rejectVisible = ref(false)
@@ -266,16 +291,31 @@ const videoFormVisible = ref(false)
 const articleFormVisible = ref(false)
 const editingId = ref(null)
 const copyingId = ref(null)
+// 新建、复制时内容放进的分类，账号由它决定；修改时不用（分类不能改）
+const formCategory = ref(null)
 const formRef = ref(null)
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 
 const articleHtml = computed(() => cleanHtml(detail.value?.content ?? ''))
 
 const sideTree = computed(() => {
-  const toNode = (c) => ({ key: c.id, label: c.name, children: c.children.map(toNode) })
+  const toNode = (c) => ({ key: c.id, label: c.name, account: c.account, children: c.children.map(toNode) })
   return [{ key: 'all', label: '全部' }, { key: 'none', label: '未分类' }, ...buildTree(categories.value).map(toNode)]
 })
-const defaultCategory = computed(() => (typeof category.value === 'number' ? category.value : null))
+const current = computed(() => categories.value.find((c) => c.id === category.value) ?? null)
+const currentKind = computed(() => categoryKind(current.value))
+
+// 复制只能到绑定了同类渠道的分类（视频到视频渠道、图文到公众号）
+const copyTree = computed(() => {
+  const toNode = (c) => ({
+    id: c.id,
+    label: c.name,
+    account: c.account,
+    disabled: categoryKind(c) !== copying.value?.kind,
+    children: c.children.map(toNode),
+  })
+  return buildTree(categories.value).map(toNode)
+})
 
 async function load() {
   const params = {}
@@ -297,23 +337,6 @@ async function loadCategories() {
 function pickCategory(key) {
   category.value = key
   load()
-}
-
-function openMove() {
-  moveTarget.value = defaultCategory.value
-  moveVisible.value = true
-}
-
-async function move() {
-  busy.value = true
-  try {
-    const count = (await api.post('/posts/category', { post_ids: selected.value.map((p) => p.id), category_id: moveTarget.value })).data
-    moveVisible.value = false
-    ElMessage.success(`已移动 ${count} 条`)
-    await Promise.all([load(), loadCategories()])
-  } finally {
-    busy.value = false
-  }
 }
 
 async function refresh() {
@@ -379,9 +402,10 @@ async function publish() {
   }
 }
 
-function openForm(kind, postId = null, copyFrom = null) {
+function openForm(kind, postId = null, copyFrom = null, categoryId = category.value) {
   editingId.value = postId
   copyingId.value = copyFrom
+  formCategory.value = postId ? null : categoryId
   if (kind === 'article') articleFormVisible.value = true
   else videoFormVisible.value = true
 }
@@ -399,10 +423,19 @@ async function edit(row) {
   openForm(row.kind, row.id)
 }
 
-// 复制内容和视频，换个账号再发；视频只能复制给视频渠道，图文只能给公众号
+// 复制内容和视频到另一个分类，发到那个分类绑定的账号
 function copy(row) {
+  copying.value = row
+  // 当前分类能放就默认放这里
+  copyTarget.value = currentKind.value === row.kind ? category.value : null
+  copyVisible.value = true
+}
+
+function confirmCopy() {
+  if (!copyTarget.value) return ElMessage.warning('请选择分类')
+  copyVisible.value = false
   detailVisible.value = false
-  openForm(row.kind, null, row.id)
+  openForm(copying.value.kind, null, copying.value.id, copyTarget.value)
 }
 
 function resetForm() {
@@ -448,11 +481,6 @@ async function remove(row) {
 
 onMounted(async () => {
   await Promise.all([load(), loadCategories()])
-  // 从「发布记录」或旧地址 /publish 跳过来时直接打开表单
-  if (['video', 'article'].includes(route.query.create)) {
-    openForm(route.query.create)
-    router.replace({ query: { ...route.query, create: undefined } })
-  }
 })
 </script>
 
@@ -488,6 +516,7 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   margin-bottom: 16px;
 }
 .tip {
@@ -547,8 +576,32 @@ onMounted(async () => {
 .actions {
   margin-top: 16px;
 }
-.move-tip {
+.copy-tip {
   margin-top: 8px;
+}
+.create {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.create .tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.node {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dim {
+  opacity: 0.4;
 }
 .publish-form {
   margin-top: 16px;

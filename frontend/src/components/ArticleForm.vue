@@ -45,17 +45,22 @@
           <el-radio :value="false">直接发表（对外可见）</el-radio>
         </el-radio-group>
       </el-form-item>
-      <el-form-item label="分类">
-        <CategorySelect v-model="form.categoryId" :categories="categories" style="width: 320px" />
-      </el-form-item>
+      <el-form-item label="分类">{{ categoryPath(categories, category) || '未分类' }}</el-form-item>
       <el-form-item label="公众号" required>
-        <el-radio-group v-model="form.accountId">
+        <div v-if="lockedId">
+          <template v-if="lockedAccount">
+            {{ lockedAccount.display_name }}
+            <span v-if="lockedAccount.status !== 'active'" class="warn">（授权已失效，请先到「账号管理」重新授权）</span>
+          </template>
+          <span v-else class="warn">分类绑定的账号不是公众号，不能发布图文，请到分类管理修改</span>
+        </div>
+        <el-radio-group v-else v-model="form.accountId">
           <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">
             {{ a.display_name }}
             <span v-if="a.status !== 'active'" class="tip">（需重新授权）</span>
           </el-radio>
         </el-radio-group>
-        <div v-if="!accounts.length" class="tip">还没有公众号，请先到「账号管理」授权</div>
+        <div v-if="!lockedId && !accounts.length" class="tip">还没有公众号，请先到「账号管理」授权</div>
       </el-form-item>
       <el-form-item label="定时">
         <div>
@@ -73,22 +78,22 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import { categoryPath } from '../categories'
 import { cleanHtml } from '../html'
 import { ARTICLE_PLATFORMS } from '../platforms'
-import CategorySelect from './CategorySelect.vue'
 
-// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，账号和定时要重新选。
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，定时要重新选。
 // 正文图片和封面不会随内容删除，复制的内容直接引用同一批图片
 const props = defineProps({
   postId: { type: Number, default: null },
   copyFrom: { type: Number, default: null },
   categories: { type: Array, required: true },
-  // 新建时默认放到内容管理里当前选中的分类
-  defaultCategory: { type: Number, default: null },
+  // 新建、复制时放进的分类（绑定了公众号）；修改时分类不能改，用内容自己的
+  categoryId: { type: Number, default: null },
 })
 const emit = defineEmits(['saved', 'cancel'])
 const { postId, copyFrom } = props
@@ -96,6 +101,10 @@ const reviewNote = ref('')
 // 新建、复制和草稿可以存草稿；已提交的内容存草稿等于撤回审核，暂不支持
 const canDraft = ref(!postId)
 const accounts = ref([])
+const category = ref(props.categoryId)
+// 分类决定的公众号，客户不能改；为空是分类没绑定账号的老内容，客户自己选（规则和后端 posts._edit_account_id 一致）
+const lockedId = ref(null)
+const lockedAccount = computed(() => accounts.value.find((a) => a.id === lockedId.value))
 const editor = ref(null)
 const imageInput = ref(null)
 const submitting = ref(false)
@@ -108,7 +117,6 @@ const form = reactive({
   sourceUrl: '',
   openComment: false,
   draftOnly: true,
-  categoryId: props.defaultCategory,
   accountId: null,
   scheduledAt: null,
 })
@@ -179,8 +187,8 @@ async function submit(draft) {
       source_url: form.sourceUrl,
       open_comment: form.openComment,
       draft_only: form.draftOnly,
-      account_id: form.accountId,
-      category_id: form.categoryId,
+      account_id: lockedId.value ? null : form.accountId,
+      category_id: postId ? null : category.value,
       scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
       draft,
     }
@@ -196,8 +204,9 @@ async function submit(draft) {
 onMounted(async () => {
   const all = (await api.get('/accounts')).data
   accounts.value = all.filter((a) => ARTICLE_PLATFORMS.includes(a.platform))
+  let post = null
   if (postId || copyFrom) {
-    const post = (await api.get(`/posts/${postId || copyFrom}`)).data
+    post = (await api.get(`/posts/${postId || copyFrom}`)).data
     Object.assign(form, {
       title: post.title,
       author: post.author,
@@ -206,17 +215,22 @@ onMounted(async () => {
       sourceUrl: post.source_url,
       openComment: post.open_comment,
       draftOnly: post.draft_only,
-      // 复制时沿用原分类
-      categoryId: post.category_id,
     })
     editor.value.innerHTML = cleanHtml(post.content)
     if (postId) {
+      category.value = post.category_id
       form.accountId = post.account?.id ?? null
       form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
       reviewNote.value = post.review_note || ''
       canDraft.value = post.review_status === 'draft'
     }
   }
+  // 草稿跟着分类当前的绑定；提交过的沿用原账号，原账号被移除了才用分类的
+  const bound = props.categories.find((c) => c.id === category.value)?.account?.id ?? null
+  if (!bound) lockedId.value = null
+  else if (postId && post.review_status !== 'draft' && post.account) lockedId.value = post.account.id
+  else lockedId.value = bound
+  if (lockedId.value) form.accountId = lockedId.value
   saved = snapshot()
 })
 </script>
@@ -227,6 +241,10 @@ onMounted(async () => {
 }
 .tip {
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.warn {
+  color: var(--el-color-danger);
   font-size: 12px;
 }
 .cover {

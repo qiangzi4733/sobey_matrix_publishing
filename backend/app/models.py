@@ -93,7 +93,8 @@ class Account(Timestamped, Base):
 
 
 class Category(Timestamped, Base):
-    """内容分类，租户内一棵树（层数限制见 routers/categories.py）。以后按分类给用户分配权限。"""
+    """内容分类，租户内一棵树，层数不限。客户用分类管理账号：绑定了账号的分类才能新建内容。
+    以后按分类给用户分配权限。"""
 
     __tablename__ = "categories"
 
@@ -102,6 +103,11 @@ class Category(Timestamped, Base):
     # 有子分类或内容时不允许删除（接口里检查），外键不级联
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), index=True)
     name: Mapped[str] = mapped_column(String(50))
+    # 新建内容发到这个账号（渠道由账号决定）。只对这个分类自己生效，下级分类不沿用；
+    # 改绑定只影响之后提交的内容。账号被移除后为空，需要重新绑定
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
+
+    account: Mapped["Account | None"] = relationship()
 
 
 class Post(Timestamped, Base):
@@ -142,6 +148,7 @@ class Post(Timestamped, Base):
     # posts 和 publish_tasks 互相引用，post_update 让 SQLAlchemy 分两步写
     current_task: Mapped["PublishTask | None"] = relationship(foreign_keys=[current_task_id], post_update=True)
     account: Mapped["Account | None"] = relationship()
+    category: Mapped["Category | None"] = relationship()
     # 正文跟着内容一起删（删除未发布的内容时）
     article: Mapped["Article | None"] = relationship(cascade="all, delete-orphan")
     creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])

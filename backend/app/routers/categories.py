@@ -1,14 +1,13 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
+from app import tasks
 from app.deps import CurrentUser, DbSession
-from app.models import Category, Post
-from app.schemas import CategoryIn, CategoryOut
+from app.models import Account, Category, Post
+from app.schemas import CategoryIn, CategoryOut, PostAccountOut
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
-
-# 再深界面放不下，实际也用不上
-MAX_DEPTH = 3
 
 
 def get_category(db: DbSession, user: CurrentUser, category_id: int) -> Category | None:
@@ -33,19 +32,6 @@ def subtree_ids(db: DbSession, user: CurrentUser, category_id: int) -> set[int]:
         ids |= more
 
 
-def _depth(parents: dict[int, int | None], category_id: int | None) -> int:
-    depth = 0
-    while category_id is not None:
-        depth += 1
-        category_id = parents[category_id]
-    return depth
-
-
-def _height(parents: dict[int, int | None], category_id: int) -> int:
-    children = [cid for cid, pid in parents.items() if pid == category_id]
-    return 1 + max((_height(parents, cid) for cid in children), default=0)
-
-
 def _check(db: DbSession, user: CurrentUser, body: CategoryIn, category: Category | None = None) -> None:
     parents = _parents(db, user)
     if body.parent_id is not None and body.parent_id not in parents:
@@ -57,9 +43,12 @@ def _check(db: DbSession, user: CurrentUser, body: CategoryIn, category: Categor
             if node == category.id:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "不能移到自己或下级分类下面")
             node = parents[node]
-    height = _height(parents, category.id) if category is not None else 1
-    if _depth(parents, body.parent_id) + height > MAX_DEPTH:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"分类最多 {MAX_DEPTH} 层")
+    if body.account_id is not None:
+        account = db.get(Account, body.account_id)
+        if account is None or account.tenant_id != user.tenant_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "账号不存在或已被移除，请重新选择")
+        if account.platform not in tasks.PUBLISHABLE:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个渠道暂未开放发布")
     duplicate = db.scalar(
         select(Category.id).where(
             Category.tenant_id == user.tenant_id,
@@ -72,9 +61,19 @@ def _check(db: DbSession, user: CurrentUser, body: CategoryIn, category: Categor
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"同一层已有「{body.name}」")
 
 
-def _out(db: DbSession, category: Category) -> CategoryOut:
-    count = db.scalar(select(func.count()).where(Post.category_id == category.id))
-    return CategoryOut(id=category.id, parent_id=category.parent_id, name=category.name, post_count=count)
+def _out(category: Category, post_count: int) -> CategoryOut:
+    return CategoryOut(
+        id=category.id,
+        parent_id=category.parent_id,
+        name=category.name,
+        account=PostAccountOut.model_validate(category.account) if category.account else None,
+        post_count=post_count,
+    )
+
+
+def _saved(db: DbSession, category: Category) -> CategoryOut:
+    db.refresh(category)
+    return _out(category, db.scalar(select(func.count()).where(Post.category_id == category.id)))
 
 
 @router.get("", response_model=list[CategoryOut])
@@ -86,30 +85,37 @@ def list_categories(db: DbSession, user: CurrentUser) -> list[CategoryOut]:
             .group_by(Post.category_id)
         ).all()
     )
-    rows = db.scalars(select(Category).where(Category.tenant_id == user.tenant_id).order_by(Category.id)).all()
-    return [CategoryOut(id=c.id, parent_id=c.parent_id, name=c.name, post_count=counts.get(c.id, 0)) for c in rows]
+    rows = db.scalars(
+        select(Category)
+        .where(Category.tenant_id == user.tenant_id)
+        .options(selectinload(Category.account))
+        .order_by(Category.id)
+    ).all()
+    return [_out(c, counts.get(c.id, 0)) for c in rows]
 
 
 @router.post("", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)
 def create_category(body: CategoryIn, db: DbSession, user: CurrentUser) -> CategoryOut:
     _check(db, user, body)
-    category = Category(tenant_id=user.tenant_id, parent_id=body.parent_id, name=body.name)
+    category = Category(tenant_id=user.tenant_id, parent_id=body.parent_id, name=body.name, account_id=body.account_id)
     db.add(category)
     db.commit()
-    return _out(db, category)
+    return _saved(db, category)
 
 
 @router.put("/{category_id}", response_model=CategoryOut)
 def update_category(category_id: int, body: CategoryIn, db: DbSession, user: CurrentUser) -> CategoryOut:
-    """改名或移到别的上级分类下（连同下级分类一起移）。"""
+    """改名、改绑定账号，或移到别的上级分类下（连同下级分类一起移）。
+    改绑定不影响已有内容：已提交的仍发到提交时的账号，草稿在提交审核时改用新账号。"""
     category = get_category(db, user, category_id)
     if category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "分类不存在")
     _check(db, user, body, category)
     category.name = body.name
     category.parent_id = body.parent_id
+    category.account_id = body.account_id
     db.commit()
-    return _out(db, category)
+    return _saved(db, category)
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)

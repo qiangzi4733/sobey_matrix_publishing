@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 
 from app import login_sessions, tasks, verification
 from app.deps import CurrentUser, DbSession
-from app.models import Account, Platform, Post, PublishStatus, PublishTask
+from app.models import Account, Category, Platform, Post, PublishStatus, PublishTask
 from app.schemas import AccountOut, AccountUsageOut, CodeIn, LoginStartOut, LoginStatusOut
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -45,6 +45,7 @@ def account_usage(account_id: int, db: DbSession, user: CurrentUser) -> AccountU
         posts=_count_unpublished_posts(db, account),
         pending_tasks=_count_tasks(db, account, [PublishStatus.scheduled, PublishStatus.queued]),
         running_tasks=_count_tasks(db, account, [PublishStatus.running]),
+        categories=db.scalar(select(func.count()).where(Category.account_id == account.id)),
     )
 
 
@@ -63,7 +64,7 @@ def delete_account(account_id: int, db: DbSession, user: CurrentUser) -> None:
     if _count_tasks(db, account, [PublishStatus.running]):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "该账号有正在发布的任务，请等发布结束后再移除")
-    # 未发布内容的 account_id 由外键置空，修改时重新选账号
+    # 未发布内容和分类的 account_id 由外键置空：内容修改时用分类当前绑定的账号，分类要重新绑定
     db.delete(account)
     db.commit()
 

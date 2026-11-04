@@ -19,9 +19,9 @@ const router = createRouter({
         { path: 'accounts', name: 'accounts', component: Accounts },
         { path: 'accounts/wechat-mp/callback', name: 'wechat-mp-callback', component: WechatMpCallback },
         { path: 'contents', name: 'contents', component: Contents },
-        // 旧地址：发布页已改成内容管理里的弹窗
-        { path: 'publish', redirect: { name: 'contents', query: { create: 'video' } } },
-        { path: 'publish-article', redirect: { name: 'contents', query: { create: 'article' } } },
+        // 旧地址：发布改成在内容管理里选好分类后新建
+        { path: 'publish', redirect: { name: 'contents' } },
+        { path: 'publish-article', redirect: { name: 'contents' } },
         { path: 'review', redirect: { name: 'contents' } },
         { path: 'tasks', name: 'tasks', component: Tasks },
       ],

@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from app import tasks, verification
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
-from app.models import Account, AccountStatus, Article, Platform, Post, PublishStatus, PublishTask, ReviewStatus
+from app.models import Account, AccountStatus, Article, Category, Platform, Post, PublishStatus, PublishTask, ReviewStatus
 from app.platforms import video_options
 from app.platforms.scheduling import NATIVE_SCHEDULE, validate_native_schedule
 from app.platforms.wechat_mp import ARTICLE_IMAGE_URL, article_image_path
@@ -24,7 +24,6 @@ from app.schemas import (
     ArticleIn,
     CodeIn,
     ImageOut,
-    MoveCategoryIn,
     PostAccountOut,
     PostDetailOut,
     PostOut,
@@ -89,10 +88,25 @@ def _publish_account(
     return account
 
 
-def _post_category(db: DbSession, user: CurrentUser, category_id: int | None) -> int | None:
-    if category_id is not None and get_category(db, user, category_id) is None:
+def _new_post_category(db: DbSession, user: CurrentUser, category_id: int | None) -> Category:
+    """新建（包括复制）只能放进绑定了账号的分类，发布账号由分类决定。"""
+    category = get_category(db, user, category_id) if category_id is not None else None
+    if category is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "分类不存在或已被删除，请重新选择")
-    return category_id
+    if category.account_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{category.name}」还没有绑定发布账号，请先在分类管理里绑定")
+    return category
+
+
+def _edit_account_id(post: Post, account_id: int | None) -> int | None:
+    """修改时发到哪个账号（分类不能改）。分类绑定了账号时客户不能选：草稿跟着分类当前的绑定，
+    已提交过的沿用原来的账号，原账号被移除了才改用分类的。分类没绑定的老内容由客户选。"""
+    category = post.category
+    if category is None or category.account_id is None:
+        return account_id
+    if post.review_status == ReviewStatus.draft or post.account_id is None:
+        return category.account_id
+    return post.account_id
 
 
 def _check_schedule(scheduled_at: datetime | None, account: Account) -> None:
@@ -293,8 +307,7 @@ def create_post(
     db: DbSession,
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
-    account_id: Annotated[int | None, Form(description="存草稿时可以不传")] = None,
-    category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
+    category_id: Annotated[int, Form(description="必须是绑定了账号的分类，发到它绑定的账号")],
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
@@ -304,10 +317,11 @@ def create_post(
     options: Annotated[str, Form(description="平台专属配置 JSON，格式见 platforms/video_options.py")] = "{}",
     draft: Annotated[bool, Form(description="存草稿：只要求标题，其余提交审核时再校验")] = False,
 ) -> PostOut:
-    """上传视频并提交审核（或存草稿）；审核通过后手动发布到选中的账号。"""
+    """上传视频并提交审核（或存草稿）；审核通过后手动发布到分类绑定的账号。"""
     if video is not None and copy_from is not None or not draft and video is None and copy_from is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择视频")
-    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频", draft)
+    category = _new_post_category(db, user, category_id)
+    account = _publish_account(db, user, category.account_id, tasks.VIDEO_PLATFORMS, "视频", draft)
     if not draft:
         _check_schedule(scheduled_at, account)
     post = Post(
@@ -316,7 +330,7 @@ def create_post(
         description=description,
         tags=[t.lstrip("#") for t in _split(tags)],
         scheduled_at=scheduled_at,
-        category_id=_post_category(db, user, category_id),
+        category_id=category.id,
     )
     # 先校验完再存视频，校验不过不留下孤儿文件
     _fill_video(post, user, account, title, cover_url, options)
@@ -333,8 +347,7 @@ def update_post(
     db: DbSession,
     user: CurrentUser,
     title: Annotated[str, Form(min_length=1, max_length=200)],
-    account_id: Annotated[int | None, Form()] = None,
-    category_id: Annotated[int | None, Form(description="不传为未分类")] = None,
+    account_id: Annotated[int | None, Form(description="只有分类没绑定账号的老内容才用，见 _edit_account_id")] = None,
     description: Annotated[str, Form(max_length=1000)] = "",
     tags: Annotated[str, Form(description="逗号分隔的话题，不带 #")] = "",
     scheduled_at: Annotated[datetime | None, Form()] = None,
@@ -347,7 +360,7 @@ def update_post(
     _check_draft(post, draft)
     if not draft and video is None and not post.video_path:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择视频")
-    account = _publish_account(db, user, account_id, tasks.VIDEO_PLATFORMS, "视频", draft)
+    account = _publish_account(db, user, _edit_account_id(post, account_id), tasks.VIDEO_PLATFORMS, "视频", draft)
     if not draft:
         _check_schedule(scheduled_at, account)
     _fill_video(post, user, account, title, cover_url, options)
@@ -357,7 +370,6 @@ def update_post(
     post.description = description
     post.tags = [t.lstrip("#") for t in _split(tags)]
     post.scheduled_at = scheduled_at
-    post.category_id = _post_category(db, user, category_id)
     return _submit_for_review(db, post, account, draft)
 
 
@@ -441,8 +453,9 @@ def _fill_article(post: Post, body: ArticleIn, cover_path: str) -> None:
 
 @router.post("/articles", response_model=PostOut, status_code=status.HTTP_201_CREATED)
 def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
-    """提交图文审核（或存草稿）；审核通过后手动发布到选中的公众号，draft_only 时只存公众号草稿箱。"""
-    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文", body.draft)
+    """提交图文审核（或存草稿）；审核通过后手动发布到分类绑定的公众号，draft_only 时只存公众号草稿箱。"""
+    category = _new_post_category(db, user, body.category_id)
+    account = _publish_account(db, user, category.account_id, tasks.ARTICLE_PLATFORMS, "图文", body.draft)
     if not body.draft:
         _check_schedule(body.scheduled_at, account)
     cover_path = _article_cover(body, user)
@@ -451,7 +464,7 @@ def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut
         created_by=user.id,
         tags=[],
         video_path="",
-        category_id=_post_category(db, user, body.category_id),
+        category_id=category.id,
     )
     _fill_article(post, body, cover_path)
     return _submit_for_review(db, post, account, body.draft)
@@ -461,11 +474,10 @@ def create_article(body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut
 def update_article(post_id: int, body: ArticleIn, db: DbSession, user: CurrentUser) -> PostOut:
     post = _get_editable(db, user, post_id, "article")
     _check_draft(post, body.draft)
-    account = _publish_account(db, user, body.account_id, tasks.ARTICLE_PLATFORMS, "图文", body.draft)
+    account = _publish_account(db, user, _edit_account_id(post, body.account_id), tasks.ARTICLE_PLATFORMS, "图文", body.draft)
     if not body.draft:
         _check_schedule(body.scheduled_at, account)
     _fill_article(post, body, _article_cover(body, user))
-    post.category_id = _post_category(db, user, body.category_id)
     return _submit_for_review(db, post, account, body.draft)
 
 
@@ -525,24 +537,6 @@ def list_posts(
         .limit(min(limit, 500))
     ).all()
     return [_post_out(post) for post in rows]
-
-
-@router.post("/posts/category", response_model=int)
-def move_category(body: MoveCategoryIn, db: DbSession, user: CurrentUser) -> int:
-    """批量移到某个分类，返回移动的条数。分类只是归档，任何状态（包括已发布）都能移，也不需要重新审核。"""
-    category_id = _post_category(db, user, body.category_id)
-    moved = db.execute(
-        update(Post)
-        .where(
-            Post.tenant_id == user.tenant_id,
-            Post.id.in_(body.post_ids),
-            or_(Post.review_status != ReviewStatus.draft, Post.created_by == user.id),
-        )
-        # 列表里的「提交时间」用的是 updated_at，移动分类不算修改内容
-        .values(category_id=category_id, updated_at=Post.updated_at)
-    ).rowcount
-    db.commit()
-    return moved
 
 
 @router.get("/posts/{post_id}", response_model=PostDetailOut)

@@ -53,6 +53,7 @@ class AccountUsageOut(BaseModel):
     posts: int  # 发到这个账号、还没点发布的内容
     pending_tasks: int  # 排队中、等定时的发布任务，移除后会标为失败
     running_tasks: int  # 正在发布，有的话不能移除
+    categories: int  # 绑定了这个账号的分类，移除后要重新绑定
 
 
 class LoginStartOut(BaseModel):
@@ -168,8 +169,10 @@ class ArticleIn(BaseModel):
     source_url: str = Field(default="", max_length=500, pattern=r"^(https?://.*)?$")
     open_comment: bool = False
     draft_only: bool = True
-    account_id: int | None = None
+    # 新建时必填，必须是绑定了公众号的分类；修改时不能改分类，忽略
     category_id: int | None = None
+    # 只有分类没绑定账号的老内容修改时才用，见 posts._edit_account_id
+    account_id: int | None = None
     scheduled_at: datetime | None = None
     draft: bool = False
 
@@ -177,20 +180,17 @@ class ArticleIn(BaseModel):
 class CategoryIn(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
     parent_id: int | None = None
+    # 绑定的发布账号，不绑定为空
+    account_id: int | None = None
 
 
 class CategoryOut(BaseModel):
     id: int
     parent_id: int | None
     name: str
+    account: PostAccountOut | None
     # 直接挂在这个分类下的内容数（不含子分类）
     post_count: int
-
-
-class MoveCategoryIn(BaseModel):
-    post_ids: list[int] = Field(min_length=1, max_length=500)
-    # 为空表示移到未分类
-    category_id: int | None = None
 
 
 class WechatAuthorizeOut(BaseModel):

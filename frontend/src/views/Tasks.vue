@@ -2,7 +2,8 @@
   <div>
     <div class="toolbar">
       <span class="tip">进行中的任务每 5 秒自动刷新</span>
-      <el-button type="primary" @click="$router.push({ name: 'contents', query: { create: 'video' } })">发布视频</el-button>
+      <!-- 新建要先选分类（分类决定发到哪个账号），所以去内容管理 -->
+      <el-button type="primary" @click="$router.push({ name: 'contents' })">去发布</el-button>
     </div>
     <el-table :data="tasks" empty-text="还没有发布任务">
       <el-table-column prop="title" label="标题" show-overflow-tooltip />

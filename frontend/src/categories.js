@@ -1,7 +1,6 @@
-// 分类接口返回平铺列表（id、parent_id），这里拼成树和完整路径
+import { ARTICLE_PLATFORMS, VIDEO_PLATFORMS } from './platforms'
 
-// 和后端 routers/categories.py 的 MAX_DEPTH 一致
-export const CATEGORY_MAX_DEPTH = 3
+// 分类接口返回平铺列表（id、parent_id），这里拼成树和完整路径
 
 export function buildTree(list) {
   const nodes = new Map(list.map((c) => [c.id, { ...c, children: [] }]))
@@ -20,4 +19,12 @@ export function categoryPath(list, id) {
   const names = []
   for (let c = byId.get(id); c; c = byId.get(c.parent_id)) names.unshift(c.name)
   return names.join(' / ')
+}
+
+// 分类绑定的账号能新建哪种内容：公众号发图文，视频渠道发视频；没绑定为空
+export function categoryKind(category) {
+  const platform = category?.account?.platform
+  if (VIDEO_PLATFORMS.includes(platform)) return 'video'
+  if (ARTICLE_PLATFORMS.includes(platform)) return 'article'
+  return null
 }
