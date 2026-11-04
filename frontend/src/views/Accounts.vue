@@ -1,12 +1,6 @@
 <template>
   <div>
-    <div class="toolbar">
-      <el-radio-group v-model="platform">
-        <el-radio-button value="">全部</el-radio-button>
-        <el-radio-button v-for="(label, key) in PLATFORMS" :key="key" :value="key">
-          <span class="with-icon"><PlatformIcon :platform="key" />{{ label }}</span>
-        </el-radio-button>
-      </el-radio-group>
+    <PageHeader title="账号管理" description="抖音和视频号每 6 小时自动检测一次登录状态">
       <el-dropdown @command="addAccount">
         <el-button type="primary">添加账号</el-button>
         <template #dropdown>
@@ -17,7 +11,7 @@
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-    </div>
+    </PageHeader>
 
     <el-alert
       v-if="invalidCount"
@@ -28,6 +22,15 @@
       :title="`有 ${invalidCount} 个账号登录已失效，发布到这些账号会失败，请重新扫码或授权`"
     />
 
+    <div class="mp-panel table-panel">
+    <div class="toolbar">
+      <el-radio-group v-model="platform">
+        <el-radio-button value="">全部</el-radio-button>
+        <el-radio-button v-for="(label, key) in PLATFORMS" :key="key" :value="key">
+          <span class="with-icon"><PlatformIcon :platform="key" />{{ label }}</span>
+        </el-radio-button>
+      </el-radio-group>
+    </div>
     <el-table :data="shown" v-loading="loading" empty-text="还没有账号，点击右上角添加">
       <el-table-column label="平台" width="130">
         <template #default="{ row }">
@@ -46,7 +49,7 @@
       <el-table-column prop="external_id" label="平台账号 ID" min-width="160" show-overflow-tooltip />
       <el-table-column label="状态" width="110">
         <template #default="{ row }">
-          <el-tag :type="STATUS[row.status].type">{{ STATUS[row.status].label }}</el-tag>
+          <StatusTag :tone="STATUS[row.status].tone">{{ STATUS[row.status].label }}</StatusTag>
         </template>
       </el-table-column>
       <el-table-column label="上次检测" width="170">
@@ -74,6 +77,7 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
     <QrLoginDialog
       v-model:visible="loginVisible"
@@ -90,14 +94,16 @@ import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
+import StatusTag from '../components/StatusTag.vue'
 import QrLoginDialog from '../components/QrLoginDialog.vue'
 import { PLATFORMS, QR_LOGIN_PLATFORMS, formatTime } from '../platforms'
 
 const STATUS = {
-  active: { label: '正常', type: 'success' },
-  expired: { label: '需重新登录', type: 'warning' },
-  error: { label: '异常', type: 'danger' },
+  active: { label: '正常', tone: 'green' },
+  expired: { label: '需重新登录', tone: 'red' },
+  error: { label: '异常', tone: 'red' },
 }
 
 const ADD_OPTIONS = [
@@ -196,10 +202,11 @@ onMounted(load)
 </script>
 
 <style scoped>
+.table-panel {
+  padding: 12px 16px;
+}
 .toolbar {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 .invalid-alert {
   margin-bottom: 12px;

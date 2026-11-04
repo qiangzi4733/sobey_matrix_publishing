@@ -10,7 +10,7 @@
             <PlatformIcon :platform="lockedAccount.platform" /> {{ PLATFORMS[lockedAccount.platform] }} · {{ lockedAccount.display_name }}
             <span v-if="lockedAccount.status !== 'active'" class="warn">（登录已失效，请先到「账号管理」重新登录）</span>
           </template>
-          <span v-else class="warn">分类绑定的账号不能发布视频，请到分类管理修改</span>
+          <span v-else class="warn">分类绑定的账号不能发布视频，请到「分类与绑定」修改</span>
         </div>
         <div v-else class="accounts">
           <div v-for="group in accountGroups" :key="group.platform" class="account-group">

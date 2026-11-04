@@ -1,6 +1,18 @@
 <template>
+  <PageHeader title="内容管理">
+    <!-- 只有绑定了账号的分类能新建，账号决定发视频还是图文 -->
+    <template v-if="currentKind">
+      <span class="tip with-icon"><PlatformIcon :platform="current.account.platform" :size="14" /> 发到 {{ current.account.display_name }}</span>
+      <el-button v-if="currentKind === 'video'" type="primary" :icon="Plus" @click="openForm('video')">发布视频</el-button>
+      <el-button v-else type="primary" :icon="Plus" @click="openForm('article')">发布图文</el-button>
+    </template>
+    <template v-else>
+      <span class="tip">{{ current ? '这个分类还没有绑定发布账号' : '选择左侧已绑定账号的分类后才能发布' }}</span>
+      <el-button @click="goSetup">去设置</el-button>
+    </template>
+  </PageHeader>
   <div class="page">
-    <div class="side">
+    <div class="side mp-panel">
       <div class="side-head">
         <span>分类</span>
         <el-button link type="primary" @click="router.push({ name: 'categories' })">管理</el-button>
@@ -24,7 +36,7 @@
         </template>
       </el-tree>
     </div>
-    <div class="main">
+    <div class="main mp-panel">
       <div class="toolbar">
         <span class="filters">
           <el-radio-group v-model="filter" @change="load">
@@ -40,21 +52,11 @@
           </el-radio-group>
           <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
         </span>
-        <!-- 只有绑定了账号的分类能新建，账号决定发视频还是图文 -->
-        <span v-if="currentKind" class="create">
-          <span class="tip"><PlatformIcon :platform="current.account.platform" :size="14" /> 发到 {{ current.account.display_name }}</span>
-          <el-button v-if="currentKind === 'video'" type="primary" @click="openForm('video')">发布视频</el-button>
-          <el-button v-else type="primary" @click="openForm('article')">发布图文</el-button>
-        </span>
-        <span v-else class="create">
-          <span class="tip">{{ current ? '这个分类还没有绑定发布账号' : '选择左侧已绑定账号的分类后才能发布' }}</span>
-          <el-button @click="goSetup">去设置</el-button>
-        </span>
       </div>
       <el-table :data="posts" empty-text="没有内容">
-        <el-table-column label="标题" min-width="150" show-overflow-tooltip>
+        <el-table-column label="标题" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-tag size="small" type="info" class="kind">{{ row.kind === 'article' ? '图文' : '视频' }}</el-tag>
+            <StatusTag class="kind">{{ row.kind === 'article' ? '图文' : '视频' }}</StatusTag>
             <!-- el-link 是 inline-flex，标题过长时整个被截掉，所以用普通文字 -->
             <span class="title-link" @click="openDetail(row)">{{ row.title }}</span>
           </template>
@@ -65,7 +67,7 @@
             <span v-else class="tip">未分类</span>
           </template>
         </el-table-column>
-        <el-table-column label="发布账号" min-width="120" show-overflow-tooltip>
+        <el-table-column label="发布账号" min-width="110" show-overflow-tooltip>
           <template #default="{ row }">
             <template v-if="row.account"><PlatformIcon :platform="row.account.platform" /> {{ row.account.display_name }}</template>
             <span v-else-if="row.account_name" class="tip">{{ row.account_name }}（已移除）</span>
@@ -73,10 +75,10 @@
             <span v-else class="warn">账号已移除，请修改</span>
           </template>
         </el-table-column>
-        <el-table-column label="定时" width="145">
+        <el-table-column label="定时" width="135">
           <template #default="{ row }">{{ row.scheduled_at ? formatTime(row.scheduled_at) : '立即' }}</template>
         </el-table-column>
-        <el-table-column label="提交" width="145">
+        <el-table-column label="提交" width="135">
           <template #default="{ row }">
             <div>{{ row.creator_name || '-' }}</div>
             <div class="tip">{{ formatTime(row.updated_at) }}</div>
@@ -86,17 +88,17 @@
           <template #default="{ row }">
             <!-- 退回原因放在悬停提示里，省一列 -->
             <el-tooltip :disabled="!row.review_note" :content="`退回原因：${row.review_note}`" placement="top">
-              <el-tag :type="REVIEW_STATUS[row.review_status].type">{{ REVIEW_STATUS[row.review_status].label }}</el-tag>
+              <StatusTag :tone="REVIEW_STATUS[row.review_status].tone">{{ REVIEW_STATUS[row.review_status].label }}</StatusTag>
             </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="发布" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.publish_status" :type="PUBLISH_STATUS[row.publish_status].type">{{ PUBLISH_STATUS[row.publish_status].label }}</el-tag>
-            <el-tag v-else-if="row.review_status === 'approved'" type="info">未发布</el-tag>
+            <StatusTag v-if="row.publish_status" :tone="PUBLISH_STATUS[row.publish_status].tone">{{ PUBLISH_STATUS[row.publish_status].label }}</StatusTag>
+            <StatusTag v-else-if="row.review_status === 'approved'" tone="blue">未发布</StatusTag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <!-- 审核要先看内容，在详情里通过或退回 -->
             <el-button v-if="row.review_status === 'pending'" link type="success" @click="openDetail(row)">审核</el-button>
@@ -250,10 +252,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 
 import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
+import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
+import StatusTag from '../components/StatusTag.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryKind, categoryPath } from '../categories'
 import { cleanHtml } from '../html'
@@ -491,20 +496,22 @@ onMounted(async () => {
 }
 .side {
   flex: 0 0 200px;
-  padding-right: 12px;
-  border-right: 1px solid var(--el-border-color);
+  box-sizing: border-box;
+  padding: 12px;
 }
 .side-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   height: 32px;
-  margin-bottom: 8px;
+  padding: 0 4px 0 8px;
+  margin-bottom: 4px;
   font-weight: 600;
 }
 .main {
   flex: 1;
   min-width: 0;
+  padding: 12px 16px 16px;
 }
 .filters {
   display: flex;
@@ -578,12 +585,7 @@ onMounted(async () => {
 .copy-tip {
   margin-top: 8px;
 }
-.create {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.create .tip {
+.with-icon {
   display: inline-flex;
   align-items: center;
   gap: 4px;

@@ -1,0 +1,100 @@
+/*
+ * 全站主题：覆盖 Element Plus 的 CSS 变量，并定义自己组件用的变量（--mp-*）。
+ * Element Plus 的浅色/深色变体是构建时用 SCSS 算的，运行时改主色要把 light-N / dark-2 一起写上。
+ * 设计稿见「矩阵分发平台 UI 重构」画布。
+ */
+:root {
+  /* 客户在国内，Google Fonts 访问不了，用系统自带的中文字体 */
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC',
+    'Helvetica Neue', Arial, sans-serif;
+
+  --el-color-primary: #2F5BEA;
+  --el-color-primary-light-3: #6D8CF0;
+  --el-color-primary-light-5: #97ADF4;
+  --el-color-primary-light-7: #C1CEF9;
+  --el-color-primary-light-8: #D5DEFB;
+  --el-color-primary-light-9: #EAEFFD;
+  --el-color-primary-dark-2: #2649BB;
+  --el-color-success: #16A34A;
+  --el-color-success-light-3: #5CBF80;
+  --el-color-success-light-5: #8AD1A4;
+  --el-color-success-light-7: #B9E3C9;
+  --el-color-success-light-8: #D0EDDB;
+  --el-color-success-light-9: #E8F6ED;
+  --el-color-success-dark-2: #12823B;
+  --el-color-warning: #E08A00;
+  --el-color-warning-light-3: #E9AD4C;
+  --el-color-warning-light-5: #F0C480;
+  --el-color-warning-light-7: #F6DCB2;
+  --el-color-warning-light-8: #F9E8CC;
+  --el-color-warning-light-9: #FCF3E6;
+  --el-color-warning-dark-2: #B36E00;
+  --el-color-danger: #D92D20;
+  --el-color-danger-light-3: #E46C63;
+  --el-color-danger-light-5: #EC9690;
+  --el-color-danger-light-7: #F4C0BC;
+  --el-color-danger-light-8: #F7D5D2;
+  --el-color-danger-light-9: #FBEAE9;
+  --el-color-danger-dark-2: #AE241A;
+  --el-color-error: #D92D20;
+  --el-color-error-light-3: #E46C63;
+  --el-color-error-light-5: #EC9690;
+  --el-color-error-light-7: #F4C0BC;
+  --el-color-error-light-8: #F7D5D2;
+  --el-color-error-light-9: #FBEAE9;
+  --el-color-error-dark-2: #AE241A;
+  --el-color-info: #6B7280;
+  --el-color-info-light-3: #979CA6;
+  --el-color-info-light-5: #B5B8C0;
+  --el-color-info-light-7: #D3D5D9;
+  --el-color-info-light-8: #E1E3E6;
+  --el-color-info-light-9: #F0F1F2;
+  --el-color-info-dark-2: #565B66;
+
+  --el-text-color-primary: #1A1D23;
+  --el-text-color-regular: #3A3F48;
+  /* 次要文字也要在白底上达到 4.5:1 */
+  --el-text-color-secondary: #5B6270;
+  --el-text-color-placeholder: #8A909C;
+  --el-border-color: #D5D9E0;
+  --el-border-color-light: #E6E8EC;
+  --el-border-color-lighter: #F0F1F3;
+  --el-bg-color-page: #F5F6F8;
+  --el-fill-color-light: #F5F6F8;
+  --el-fill-color-lighter: #FAFBFC;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-component-size: 34px;
+
+  /* 自己组件用的颜色：页面底色、卡片 */
+  --mp-page-bg: #F5F6F8;
+  --mp-panel-bg: #FFFFFF;
+  --mp-panel-border: #E6E8EC;
+  --mp-panel-radius: 12px;
+  --mp-nav-active-bg: #EEF2FF;
+  --mp-nav-active-fg: #2643B8;
+}
+
+/* 白色卡片：页面里的主要内容块都放在里面 */
+.mp-panel {
+  background: var(--mp-panel-bg);
+  border: 1px solid var(--mp-panel-border);
+  border-radius: var(--mp-panel-radius);
+}
+
+/* 表格放进卡片后，表头不用再加底色，和设计稿一致 */
+.el-table {
+  --el-table-header-bg-color: transparent;
+  --el-table-header-text-color: var(--el-text-color-secondary);
+  --el-table-border-color: var(--el-border-color-lighter);
+}
+.el-table th.el-table__cell {
+  font-weight: 500;
+}
+.el-button {
+  font-weight: 500;
+}
+.el-dialog,
+.el-drawer {
+  --el-dialog-border-radius: var(--mp-panel-radius);
+}

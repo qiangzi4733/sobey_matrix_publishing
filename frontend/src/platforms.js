@@ -23,21 +23,21 @@ export const VIDEO_OPTION_LABELS = {
   cover_landscape: { label: '横封面', image: true },
 }
 
-// 审核状态和发布状态分开显示；发布状态是这一轮发布任务的结果，没点「发布」时为空
+// 审核状态和发布状态分开显示；发布状态是这一轮发布任务的结果，没点「发布」时为空。tone 是 StatusTag 的颜色
 export const REVIEW_STATUS = {
-  draft: { label: '草稿', type: 'info' },
-  pending: { label: '待审核', type: 'warning' },
-  rejected: { label: '已退回', type: 'danger' },
-  approved: { label: '已通过', type: 'success' },
+  draft: { label: '草稿', tone: 'gray' },
+  pending: { label: '待审核', tone: 'amber' },
+  rejected: { label: '已退回', tone: 'red' },
+  approved: { label: '已通过', tone: 'green' },
 }
 
 export const PUBLISH_STATUS = {
-  publishing: { label: '发布中', type: 'primary' },
+  publishing: { label: '发布中', tone: 'sky' },
   // 平台自带定时的已交给平台、或等本平台到点提交，到点前都不对外可见
-  scheduled: { label: '已定时', type: 'warning' },
-  success: { label: '发布成功', type: 'success' },
-  draft_saved: { label: '已存草稿', type: 'success' },
-  failed: { label: '发布失败', type: 'danger' },
+  scheduled: { label: '已定时', tone: 'purple' },
+  success: { label: '发布成功', tone: 'green' },
+  draft_saved: { label: '已存草稿', tone: 'green' },
+  failed: { label: '发布失败', tone: 'red' },
 }
 
 // 没点过发布、或这一轮发布失败的内容可以修改、删除（和后端 _get_editable 一致）

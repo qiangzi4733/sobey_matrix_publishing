@@ -14,7 +14,9 @@ html {
   color-scheme: light;
 }
 body {
-  background: var(--el-bg-color);
+  background: var(--mp-page-bg);
+  font-family: var(--el-font-family);
+  font-size: 14px;
   color: var(--el-text-color-primary);
 }
 </style>

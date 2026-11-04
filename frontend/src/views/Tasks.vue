@@ -1,10 +1,10 @@
 <template>
   <div>
-    <div class="toolbar">
-      <span class="tip">进行中的任务每 5 秒自动刷新</span>
+    <PageHeader title="发布记录" description="每次点「发布」或重试都会留一条记录，进行中的任务每 5 秒自动刷新">
       <!-- 新建要先选分类（分类决定发到哪个账号），所以去内容管理 -->
       <el-button type="primary" @click="$router.push({ name: 'contents' })">去发布</el-button>
-    </div>
+    </PageHeader>
+    <div class="mp-panel table-panel">
     <el-table :data="tasks" empty-text="还没有发布任务">
       <el-table-column prop="title" label="标题" show-overflow-tooltip />
       <el-table-column label="账号" width="200">
@@ -13,9 +13,9 @@
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
           <!-- 平台自带定时：提交成功只代表平台已接收，到点由平台发布 -->
-          <el-tag v-if="row.status === 'success' && row.draft" type="success">已存草稿</el-tag>
-          <el-tag v-else-if="row.status === 'success' && row.scheduled_at" type="success">已提交定时</el-tag>
-          <el-tag v-else :type="STATUS[row.status].type">{{ STATUS[row.status].label }}</el-tag>
+          <StatusTag v-if="row.status === 'success' && row.draft" tone="green">已存草稿</StatusTag>
+          <StatusTag v-else-if="row.status === 'success' && row.scheduled_at" tone="purple">已提交定时</StatusTag>
+          <StatusTag v-else :tone="STATUS[row.status].tone">{{ STATUS[row.status].label }}</StatusTag>
         </template>
       </el-table-column>
       <el-table-column label="时间" width="200">
@@ -39,6 +39,7 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
     <el-dialog v-model="verifyVisible" title="平台要求短信验证" width="420px">
       <p class="tip">{{ verify.message }}</p>
@@ -59,14 +60,16 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 import api from '../api'
+import PageHeader from '../components/PageHeader.vue'
+import StatusTag from '../components/StatusTag.vue'
 import { PLATFORMS, formatTime } from '../platforms'
 
 const STATUS = {
-  scheduled: { label: '定时中', type: 'info' },
-  queued: { label: '排队中', type: 'info' },
-  running: { label: '发布中', type: 'primary' },
-  success: { label: '已发布', type: 'success' },
-  failed: { label: '失败', type: 'danger' },
+  scheduled: { label: '定时中', tone: 'purple' },
+  queued: { label: '排队中', tone: 'gray' },
+  running: { label: '发布中', tone: 'sky' },
+  success: { label: '已发布', tone: 'green' },
+  failed: { label: '失败', tone: 'red' },
 }
 
 const tasks = ref([])
@@ -127,11 +130,8 @@ onBeforeUnmount(() => clearTimeout(timer))
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+.table-panel {
+  padding: 4px 16px 12px;
 }
 .tip {
   color: var(--el-text-color-secondary);

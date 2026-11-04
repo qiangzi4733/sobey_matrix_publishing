@@ -52,7 +52,7 @@
             {{ lockedAccount.display_name }}
             <span v-if="lockedAccount.status !== 'active'" class="warn">（授权已失效，请先到「账号管理」重新授权）</span>
           </template>
-          <span v-else class="warn">分类绑定的账号不是公众号，不能发布图文，请到分类管理修改</span>
+          <span v-else class="warn">分类绑定的账号不是公众号，不能发布图文，请到「分类与绑定」修改</span>
         </div>
         <el-radio-group v-else v-model="form.accountId">
           <el-radio v-for="a in accounts" :key="a.id" :value="a.id" :disabled="a.status !== 'active'">

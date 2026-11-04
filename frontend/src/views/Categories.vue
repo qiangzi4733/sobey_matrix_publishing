@@ -1,9 +1,9 @@
 <template>
   <div>
-    <div class="toolbar">
+    <PageHeader title="分类与绑定" description="内容建在哪个分类，就发到这个分类绑定的账号；下级分类不沿用上级的绑定，有内容或下级分类的不能删除">
       <el-button type="primary" @click="openEdit(null)">新建分类</el-button>
-      <span class="tip">绑定了账号的分类才能新建内容，下级分类不沿用上级的绑定；有内容或下级分类的不能删除</span>
-    </div>
+    </PageHeader>
+    <div class="mp-panel table-panel">
     <el-table :data="tree" row-key="id" default-expand-all :tree-props="{ children: 'children' }" empty-text="还没有分类">
       <el-table-column prop="name" label="分类名称" min-width="180" />
       <el-table-column label="绑定账号" min-width="180">
@@ -28,6 +28,7 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
     <el-dialog v-model="editVisible" :title="editing ? '修改分类' : '新建分类'" width="440px" append-to-body>
       <el-form label-width="100px" @submit.prevent>
@@ -80,6 +81,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
 import { buildTree } from '../categories'
+import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
 import { ARTICLE_PLATFORMS, PLATFORMS, VIDEO_PLATFORMS, formatTime } from '../platforms'
 
@@ -179,11 +181,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+.table-panel {
+  padding: 4px 16px 12px;
 }
 .tip {
   color: var(--el-text-color-secondary);
