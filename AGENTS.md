@@ -135,7 +135,7 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - 第一次连接偶尔会报 `No route to host`，先重试，不要急着排障。
 - 宿主机地址会随虚拟机网络变化：2026-11-02 起虚拟机改为 NAT（虚拟机 `192.168.64.6`，宿主机即网关 `192.168.64.1`），旧地址 `172.16.192.6` 已不可用。连不上时先看 `route -n get default` 的网关，并用 `ssh-keyscan` 核对主机密钥指纹与已知的一致，再**征得用户同意**后更新 `~/.ssh/config` 和 `docker context update mac-host`。
 - 项目在共享目录：虚拟机路径 `/Users/qiangzi/Desktop/VirtualBuddyShared/VM-share/projects/matrix-publishing` = 宿主机路径 `/Users/qiangzi/VM-share/projects/matrix-publishing`。**运行时 bind mount 必须用宿主机路径**，由 `.env.docker-host` 的 `HOST_PROJECT_DIR` 提供。
-- 端口发布在**宿主机**的 127.0.0.1 上，不在虚拟机里。虚拟机里访问前端要开 SSH 隧道（见下）。
+- 端口发布在**宿主机**的 127.0.0.1 上，不在虚拟机里。虚拟机里访问前端要开 SSH 隧道（见下）。例外：前端端口按 `.env.docker-host` 的 `FRONTEND_BIND` 绑定，2026-11-03 起设为 `0.0.0.0`，局域网可以直接访问 `http://宿主机局域网IP:5173`（当时宿主机是 `172.19.4.171`，会随网络变）。
 - 虚拟机系统时区是美国太平洋时间，比北京时间晚 15～16 小时。本文档和迁移文件名里的日期都按**北京时间**写，记录新日期时也按北京时间（`TZ=Asia/Shanghai date`）。
 - 未经用户同意不要执行 `docker system prune`、`docker volume prune`、`docker compose down -v` 等清理操作。
 - 国内网络：Docker Hub 直连会断，镜像走 `.env.docker-host` 里的 `IMAGE_MIRROR`（DaoCloud）。镜像站在构建时偶尔对基础镜像返回 401，先 `docker pull` 该镜像再构建。PyPI 用阿里云、npm 用 npmmirror、apt 用阿里云 https 并开了重试。

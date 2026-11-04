@@ -93,8 +93,9 @@ services:
           create_host_path: false
       # node_modules 放命名卷：避免走共享目录变慢，也避免和宿主机架构混用
       - node-modules:/app/node_modules
+    # 默认只给宿主机本机访问；局域网访问在 .env.docker-host 设 FRONTEND_BIND=0.0.0.0（后端经 Vite 的 /api 代理，不用另开端口）
     ports:
-      - "127.0.0.1:5173:5173"
+      - "${FRONTEND_BIND:-127.0.0.1}:5173:5173"
     depends_on:
       - backend
 
