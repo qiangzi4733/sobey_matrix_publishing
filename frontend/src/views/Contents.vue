@@ -156,25 +156,18 @@
       />
     </el-drawer>
 
-    <!-- 新建、修改：视频字段少用弹窗；图文有正文编辑器，用宽抽屉 -->
-    <el-dialog
-      v-model="videoFormVisible"
-      :title="editingId ? '修改视频' : copyingId ? '复制视频' : '发布视频'"
-      width="720px"
-      top="5vh"
-      :before-close="beforeFormClose"
-      @closed="resetForm"
-    >
-      <VideoForm v-if="videoFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
-    </el-dialog>
+    <!-- 新建、修改、复制都用全屏页：左边填写，右边预览和检查 -->
     <el-drawer
-      v-model="articleFormVisible"
-      :title="`${editingId ? '修改' : copyingId ? '复制' : '发布'}图文（微信公众号）`"
-      size="min(960px, 92%)"
+      v-model="formVisible"
+      :with-header="false"
+      size="100%"
+      direction="btt"
+      class="form-drawer"
       :before-close="beforeFormClose"
       @closed="resetForm"
     >
-      <ArticleForm v-if="articleFormVisible" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
+      <VideoForm v-if="formKind === 'video'" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
+      <ArticleForm v-else-if="formKind === 'article'" ref="formRef" :post-id="editingId" :copy-from="copyingId" :categories="categories" :category-id="formCategory" @saved="formSaved" @cancel="closeForm" />
     </el-drawer>
 
     <el-dialog v-model="copyVisible" title="复制到分类" width="440px">
@@ -277,8 +270,9 @@ const publishMode = ref('now')
 const publishAt = ref(null)
 const scheduleExpired = ref(false)
 const busy = ref(false)
-const videoFormVisible = ref(false)
-const articleFormVisible = ref(false)
+const formVisible = ref(false)
+// 表单关掉后要等抽屉动画结束（resetForm）才卸载，所以单独记种类
+const formKind = ref(null)
 const editingId = ref(null)
 const copyingId = ref(null)
 // 新建、复制时内容放进的分类，账号由它决定；修改时不用（分类不能改）
@@ -465,8 +459,8 @@ function openForm(kind, postId = null, copyFrom = null, categoryId = category.va
   editingId.value = postId
   copyingId.value = copyFrom
   formCategory.value = postId ? null : categoryId
-  if (kind === 'article') articleFormVisible.value = true
-  else videoFormVisible.value = true
+  formKind.value = kind
+  formVisible.value = true
 }
 
 async function edit(row) {
@@ -500,6 +494,7 @@ function confirmCopy() {
 function resetForm() {
   editingId.value = null
   copyingId.value = null
+  formKind.value = null
 }
 
 async function beforeFormClose(done) {
@@ -517,14 +512,12 @@ async function beforeFormClose(done) {
 
 function closeForm() {
   beforeFormClose(() => {
-    videoFormVisible.value = false
-    articleFormVisible.value = false
+    formVisible.value = false
   })
 }
 
 async function formSaved(draft) {
-  videoFormVisible.value = false
-  articleFormVisible.value = false
+  formVisible.value = false
   // 跳到刚保存的内容所在的分组
   filter.value = draft ? 'draft' : 'pending'
   await load()
@@ -769,13 +762,18 @@ onMounted(async () => {
   padding: 10px 16px 6px;
   border-top: 1px solid var(--mp-panel-border);
 }
-.danger-item {
-  color: var(--el-color-danger);
-}
 </style>
 <style>
 /* 抽屉挂在 body 下，scoped 样式管不到；详情自己排版，去掉默认内边距 */
-.detail-drawer .el-drawer__body {
+.detail-drawer .el-drawer__body,
+.form-drawer .el-drawer__body {
   padding: 0;
+}
+.form-drawer .el-drawer__body {
+  background: var(--mp-page-bg);
+}
+/* 下拉菜单挂在 body 下，scoped 样式管不到 */
+.el-dropdown-menu__item.danger-item {
+  color: var(--el-color-danger);
 }
 </style>

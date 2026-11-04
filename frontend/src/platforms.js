@@ -13,9 +13,16 @@ export const VIDEO_PLATFORMS = ['channels', 'douyin']
 export const ARTICLE_PLATFORMS = ['wechat_mp']
 
 // 发布视频时各平台不同的规则，和后端 platforms/video_options.py、scheduling.py 保持一致
+// scheduleMin 最早提前多少分钟、scheduleDays 最远多少天，和后端 scheduling.NATIVE_SCHEDULE 一致
 export const VIDEO_RULES = {
-  douyin: { titleMax: 30, schedule: '2 小时后、14 天内' },
-  channels: { titleMax: 200, schedule: '10 分钟后、30 天内', titleTip: '视频号短标题会自动截取为 7~15 字' },
+  douyin: { titleMax: 30, schedule: '2 小时后、14 天内', scheduleMin: 120, scheduleDays: 14 },
+  channels: {
+    titleMax: 200,
+    schedule: '10 分钟后、30 天内',
+    scheduleMin: 10,
+    scheduleDays: 30,
+    titleTip: '视频号短标题会自动截取为 7~15 字',
+  },
 }
 
 // 平台专属配置在内容详情里的显示名；image 表示值是图片地址
