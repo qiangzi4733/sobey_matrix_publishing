@@ -128,6 +128,8 @@ class PostOut(BaseModel):
     scheduled_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # 视频的竖封面或图文封面，列表里做缩略图；视频没传封面时为空
+    cover_url: str = ""
 
 
 class PostDetailOut(PostOut):
@@ -138,8 +140,6 @@ class PostDetailOut(PostOut):
     options: dict = {}
     author: str = ""
     content: str = ""
-    # 视频的竖封面或图文封面，视频没传封面时为空
-    cover_url: str = ""
     source_url: str = ""
     open_comment: bool = False
     draft_only: bool = True

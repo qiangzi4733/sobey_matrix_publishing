@@ -18,7 +18,9 @@
         <span class="group">{{ group.label }}</span>
         <router-link v-for="item in group.items" :key="item.to" :to="item.to" class="item" active-class="active">
           <el-icon :size="18"><component :is="item.icon" /></el-icon>
-          {{ item.label }}
+          <span class="item-label">{{ item.label }}</span>
+          <span v-if="item.badge === 'todo' && badges.todo" class="count" :aria-label="`${badges.todo} 条内容等待处理`">{{ badges.todo }}</span>
+          <span v-if="item.badge === 'accounts' && badges.expiredAccounts" class="dot" :aria-label="`${badges.expiredAccounts} 个账号需要重新登录`" />
         </router-link>
       </template>
 
@@ -35,35 +37,43 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Clock, Document, FolderOpened, User } from '@element-plus/icons-vue'
+import { onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Document, FolderOpened, User } from '@element-plus/icons-vue'
 
 import api, { clearToken } from '../api'
+import { badges, refreshBadges } from '../badges'
 
 const NAV = [
   {
     label: '内容',
-    items: [
-      { to: '/contents', label: '内容管理', icon: Document },
-      { to: '/tasks', label: '发布记录', icon: Clock },
-    ],
+    // 发布记录在内容详情里看，不单独设页面
+    items: [{ to: '/contents', label: '内容管理', icon: Document, badge: 'todo' }],
   },
   {
     label: '设置',
     items: [
-      { to: '/accounts', label: '账号管理', icon: User },
+      { to: '/accounts', label: '账号管理', icon: User, badge: 'accounts' },
       { to: '/categories', label: '分类与绑定', icon: FolderOpened },
     ],
   },
 ]
 
+const route = useRoute()
 const router = useRouter()
 const me = ref(null)
 
 onMounted(async () => {
   me.value = (await api.get('/auth/me')).data
 })
+// 内容管理、账号管理自己会在加载后刷新，其他页面切换时刷新一次
+watch(
+  () => route.name,
+  (name) => {
+    if (name !== 'contents' && name !== 'accounts') refreshBadges()
+  },
+  { immediate: true },
+)
 
 function logout() {
   clearToken()
@@ -142,6 +152,24 @@ function logout() {
   background: var(--mp-nav-active-bg);
   color: var(--mp-nav-active-fg);
   font-weight: 600;
+}
+.item-label {
+  flex: 1;
+}
+.count {
+  padding: 0 7px;
+  border-radius: 10px;
+  background: #fff1d6;
+  color: #8a5300;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
 }
 .me {
   margin-top: auto;

@@ -5,11 +5,11 @@ import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app import tasks, verification
@@ -161,6 +161,11 @@ def _publish_status(post: Post) -> str | None:
     return "success"
 
 
+def _cover_url(post: Post) -> str:
+    path = post.article.cover_path if post.article else post.cover_path
+    return f"/api/{path}" if path else ""
+
+
 def _post_out(post: Post, detail: bool = False) -> PostOut:
     task = post.current_task
     fields = dict(
@@ -180,12 +185,11 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
         scheduled_at=post.scheduled_at,
         created_at=post.created_at,
         updated_at=post.updated_at,
+        cover_url=_cover_url(post),
     )
     if not detail:
         return PostOut(**fields)
     out = PostDetailOut(**fields, description=post.description, tags=post.tags)
-    if post.cover_path:
-        out.cover_url = f"/api/{post.cover_path}"
     # 图片字段在库里是路径，给前端换回地址
     out.options = {
         key: f"/api/{value}" if key in video_options.IMAGE_FIELDS else value for key, value in post.options.items()
@@ -193,7 +197,6 @@ def _post_out(post: Post, detail: bool = False) -> PostOut:
     if post.article:
         out.author = post.article.author
         out.content = post.article.content
-        out.cover_url = f"/api/{post.article.cover_path}" if post.article.cover_path else ""
         out.source_url = post.article.source_url
         out.open_comment = post.article.open_comment
         out.draft_only = post.article.draft_only
@@ -485,6 +488,41 @@ def update_article(post_id: int, body: ArticleIn, db: DbSession, user: CurrentUs
 ListStatus = Literal["draft", "pending", "rejected", "to_publish", "publishing", "scheduled", "published", "failed"]
 
 
+def _visible_posts(user: CurrentUser):
+    """本租户的内容，别人的草稿除外；外连当前发布任务（PublishTask），按发布状态筛选要用。"""
+    return (
+        select(Post)
+        .outerjoin(PublishTask, Post.current_task_id == PublishTask.id)
+        .where(Post.tenant_id == user.tenant_id, or_(Post.review_status != ReviewStatus.draft, Post.created_by == user.id))
+    )
+
+
+def _status_filter(status_: str, now: datetime):
+    """status 按「要谁处理」分组，和 _publish_status 的结果一一对应（已存草稿算已发布）。"""
+    task = PublishTask
+    if status_ in ("draft", "pending", "rejected"):
+        return Post.review_status == status_
+    if status_ == "to_publish":
+        return and_(Post.review_status == ReviewStatus.approved, Post.current_task_id.is_(None))
+    if status_ == "publishing":
+        return task.status.in_([PublishStatus.queued, PublishStatus.running])
+    if status_ == "scheduled":
+        return or_(task.status == PublishStatus.scheduled, and_(task.status == PublishStatus.success, Post.scheduled_at > now))
+    if status_ == "published":
+        return and_(task.status == PublishStatus.success, or_(Post.scheduled_at.is_(None), Post.scheduled_at <= now))
+    return task.status == PublishStatus.failed
+
+
+def _scope_filters(query, db: DbSession, user: CurrentUser, category_id: int | None, uncategorized: bool, mine: bool):
+    if category_id is not None:
+        query = query.where(Post.category_id.in_(subtree_ids(db, user, category_id)))
+    elif uncategorized:
+        query = query.where(Post.category_id.is_(None))
+    if mine:
+        query = query.where(Post.created_by == user.id)
+    return query
+
+
 @router.get("/posts", response_model=list[PostOut])
 def list_posts(
     db: DbSession,
@@ -496,35 +534,9 @@ def list_posts(
     limit: int = 100,
 ) -> list[PostOut]:
     """status 按「要谁处理」分组，见 ListStatus；category_id 包含下级分类；uncategorized 只看未分类；mine 只看自己提交的。"""
-    task = PublishTask
-    now = datetime.now(UTC)
-    query = (
-        select(Post)
-        .outerjoin(task, Post.current_task_id == task.id)
-        .where(Post.tenant_id == user.tenant_id, or_(Post.review_status != ReviewStatus.draft, Post.created_by == user.id))
-    )
-    if status_ in ("draft", "pending", "rejected"):
-        query = query.where(Post.review_status == status_)
-    elif status_ == "to_publish":
-        query = query.where(Post.review_status == ReviewStatus.approved, Post.current_task_id.is_(None))
-    elif status_ == "publishing":
-        query = query.where(task.status.in_([PublishStatus.queued, PublishStatus.running]))
-    elif status_ == "scheduled":
-        query = query.where(
-            or_(task.status == PublishStatus.scheduled, and_(task.status == PublishStatus.success, Post.scheduled_at > now))
-        )
-    elif status_ == "published":
-        query = query.where(
-            task.status == PublishStatus.success, or_(Post.scheduled_at.is_(None), Post.scheduled_at <= now)
-        )
-    elif status_ == "failed":
-        query = query.where(task.status == PublishStatus.failed)
-    if category_id is not None:
-        query = query.where(Post.category_id.in_(subtree_ids(db, user, category_id)))
-    elif uncategorized:
-        query = query.where(Post.category_id.is_(None))
-    if mine:
-        query = query.where(Post.created_by == user.id)
+    query = _scope_filters(_visible_posts(user), db, user, category_id, uncategorized, mine)
+    if status_:
+        query = query.where(_status_filter(status_, datetime.now(UTC)))
     rows = db.scalars(
         query.options(
             selectinload(Post.article),
@@ -537,6 +549,38 @@ def list_posts(
         .limit(min(limit, 500))
     ).all()
     return [_post_out(post) for post in rows]
+
+
+# 要放在 /posts/{post_id} 前面，否则 counts 会被当成 id
+@router.get("/posts/counts", response_model=dict[str, int])
+def count_posts(
+    db: DbSession,
+    user: CurrentUser,
+    category_id: int | None = None,
+    uncategorized: bool = False,
+    mine: bool = False,
+) -> dict[str, int]:
+    """各状态分组的条数（筛选条件和列表相同），all 是全部。一次查询用 FILTER 统计所有分组。"""
+    now = datetime.now(UTC)
+    groups = get_args(ListStatus)
+    columns = [func.count().filter(_status_filter(name, now)).label(name) for name in groups]
+    query = _scope_filters(_visible_posts(user), db, user, category_id, uncategorized, mine).with_only_columns(
+        func.count().label("all"), *columns
+    )
+    return dict(db.execute(query).one()._mapping)
+
+
+@router.get("/posts/{post_id}/tasks", response_model=list[PublishTaskOut])
+def list_post_tasks(post_id: int, db: DbSession, user: CurrentUser) -> list[PublishTaskOut]:
+    """这条内容的发布记录，新的在前；修改前失败的旧任务也在里面（不能再重试）。"""
+    post = _get_post(db, user, post_id)
+    rows = db.scalars(
+        select(PublishTask)
+        .where(PublishTask.post_id == post.id)
+        .options(selectinload(PublishTask.post), selectinload(PublishTask.result))
+        .order_by(PublishTask.id.desc())
+    ).all()
+    return [_task_out(task) for task in rows]
 
 
 @router.get("/posts/{post_id}", response_model=PostDetailOut)

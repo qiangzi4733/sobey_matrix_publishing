@@ -4,7 +4,6 @@ import Layout from './views/Layout.vue'
 import Login from './views/Login.vue'
 import Accounts from './views/Accounts.vue'
 import WechatMpCallback from './views/WechatMpCallback.vue'
-import Tasks from './views/Tasks.vue'
 import Categories from './views/Categories.vue'
 import Contents from './views/Contents.vue'
 
@@ -25,7 +24,8 @@ const router = createRouter({
         { path: 'publish', redirect: { name: 'contents' } },
         { path: 'publish-article', redirect: { name: 'contents' } },
         { path: 'review', redirect: { name: 'contents' } },
-        { path: 'tasks', name: 'tasks', component: Tasks },
+        // 发布记录并进了内容详情
+        { path: 'tasks', redirect: { name: 'contents' } },
       ],
     },
   ],

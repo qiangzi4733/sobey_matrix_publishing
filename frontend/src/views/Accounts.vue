@@ -94,6 +94,7 @@ import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import api from '../api'
+import { badges } from '../badges'
 import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
 import StatusTag from '../components/StatusTag.vue'
@@ -136,6 +137,7 @@ async function load() {
   loading.value = true
   try {
     accounts.value = (await api.get('/accounts')).data
+    badges.expiredAccounts = accounts.value.filter((a) => a.status !== 'active').length
   } finally {
     loading.value = false
   }

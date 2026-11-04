@@ -40,6 +40,42 @@ export const PUBLISH_STATUS = {
   failed: { label: '发布失败', tone: 'red' },
 }
 
+// 列表里只显示一个状态：审核没通过时看审核状态，通过后看发布状态。key 和列表页签（后端 ListStatus）一致
+export const POST_STATUS = {
+  draft: { label: '草稿', tone: 'gray' },
+  pending: { label: '待审核', tone: 'amber' },
+  rejected: { label: '已退回', tone: 'red' },
+  to_publish: { label: '待发布', tone: 'blue' },
+  publishing: { label: '发布中', tone: 'sky' },
+  scheduled: { label: '已定时', tone: 'purple' },
+  published: { label: '发布成功', tone: 'green' },
+  failed: { label: '发布失败', tone: 'red' },
+}
+
+export function postStatus(post) {
+  if (post.review_status !== 'approved') return post.review_status
+  if (!post.publish_status) return 'to_publish'
+  if (post.publish_status === 'success' || post.publish_status === 'draft_saved') return 'published'
+  return post.publish_status
+}
+
+// 状态标签的文字：公众号只存草稿时写清楚，免得以为已经对外发表
+export const postStatusLabel = (post) =>
+  post.publish_status === 'draft_saved' ? '已存草稿' : POST_STATUS[postStatus(post)].label
+
+// 内容列表的页签，按处理阶段分成审核、发布两组；urgent 的数量要有人处理，标颜色
+export const POST_TABS = [
+  { key: '', label: '全部' },
+  { key: 'draft', label: '草稿', group: 'review' },
+  { key: 'pending', label: '待审核', group: 'review', urgent: true },
+  { key: 'rejected', label: '已退回', group: 'review' },
+  { key: 'to_publish', label: '待发布', group: 'publish', urgent: true },
+  { key: 'publishing', label: '发布中', group: 'publish' },
+  { key: 'scheduled', label: '已定时', group: 'publish' },
+  { key: 'published', label: '已发布', group: 'publish' },
+  { key: 'failed', label: '发布失败', group: 'publish', urgent: true },
+]
+
 // 没点过发布、或这一轮发布失败的内容可以修改、删除（和后端 _get_editable 一致）
 export const isEditable = (post) => !post.publish_status || post.publish_status === 'failed'
 

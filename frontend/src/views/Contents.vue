@@ -1,15 +1,35 @@
 <template>
   <PageHeader title="内容管理">
-    <!-- 只有绑定了账号的分类能新建，账号决定发视频还是图文 -->
-    <template v-if="currentKind">
-      <span class="tip with-icon"><PlatformIcon :platform="current.account.platform" :size="14" /> 发到 {{ current.account.display_name }}</span>
-      <el-button v-if="currentKind === 'video'" type="primary" :icon="Plus" @click="openForm('video')">发布视频</el-button>
-      <el-button v-else type="primary" :icon="Plus" @click="openForm('article')">发布图文</el-button>
-    </template>
-    <template v-else>
-      <span class="tip">{{ current ? '这个分类还没有绑定发布账号' : '选择左侧已绑定账号的分类后才能发布' }}</span>
-      <el-button @click="goSetup">去设置</el-button>
-    </template>
+    <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索标题" clearable class="search" />
+    <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
+    <!-- 新建先选分类：分类决定发到哪个账号、发视频还是图文 -->
+    <el-dropdown trigger="click" placement="bottom-end" @command="createIn">
+      <el-button type="primary" :icon="Plus">新建内容<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+      <template #dropdown>
+        <el-dropdown-menu class="create-menu">
+          <li class="create-title" role="presentation">发到哪个分类？</li>
+          <template v-if="createGroups.length">
+            <template v-for="group in createGroups" :key="group.kind">
+              <li class="create-group" role="presentation">{{ group.label }}</li>
+              <el-dropdown-item v-for="c in group.items" :key="c.id" :command="c.id">
+                <span class="create-item">
+                  <PlatformIcon :platform="c.account.platform" :size="22" />
+                  <span class="create-text">
+                    <span>{{ categoryPath(categories, c.id) }}</span>
+                    <span :class="c.account.status === 'active' ? 'tip' : 'warn'">
+                      {{ PLATFORMS[c.account.platform] }} {{ c.account.display_name }}{{ c.account.status === 'active' ? '' : ' · 登录已失效，可以先写稿' }}
+                    </span>
+                  </span>
+                  <span v-if="c.id === category" class="tip">当前分类</span>
+                </span>
+              </el-dropdown-item>
+            </template>
+          </template>
+          <li v-else class="create-empty tip" role="presentation">还没有绑定了账号的分类</li>
+          <li class="create-foot tip" role="presentation">没有合适的分类？<el-button link type="primary" @click="goSetup">去给分类绑定账号</el-button></li>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
   </PageHeader>
   <div class="page">
     <div class="side mp-panel">
@@ -30,142 +50,110 @@
           <span class="node">
             <span class="node-name">{{ data.label }}</span>
             <!-- 绑定的账号登录失效时在树上就提醒，免得提交时才发现 -->
-            <PlatformIcon v-if="data.account" :platform="data.account.platform" :size="14" :class="{ dim: data.account.status !== 'active' }" />
-            <span v-if="data.account && data.account.status !== 'active'" class="warn">需重新登录</span>
+            <span v-if="data.account" class="node-account" :class="{ warn: data.account.status !== 'active' }">
+              <PlatformIcon :platform="data.account.platform" :size="12" />
+              {{ data.account.display_name }}{{ data.account.status !== 'active' ? ' · 需重新登录' : '' }}
+            </span>
           </span>
         </template>
       </el-tree>
     </div>
     <div class="main mp-panel">
-      <div class="toolbar">
-        <span class="filters">
-          <el-radio-group v-model="filter" @change="load">
-            <el-radio-button value="draft">草稿</el-radio-button>
-            <el-radio-button value="pending">待审核</el-radio-button>
-            <el-radio-button value="rejected">已退回</el-radio-button>
-            <el-radio-button value="to_publish">待发布</el-radio-button>
-            <el-radio-button value="publishing">发布中</el-radio-button>
-            <el-radio-button value="scheduled">已定时</el-radio-button>
-            <el-radio-button value="published">已发布</el-radio-button>
-            <el-radio-button value="failed">发布失败</el-radio-button>
-            <el-radio-button value="">全部</el-radio-button>
-          </el-radio-group>
-          <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
-        </span>
+      <div class="tabs" role="tablist" aria-label="按状态筛选">
+        <template v-for="tab in POST_TABS" :key="tab.key">
+          <span v-if="tab.key === 'draft' || tab.key === 'to_publish'" class="tab-sep" aria-hidden="true" />
+          <button
+            type="button"
+            role="tab"
+            class="tab"
+            :class="{ active: filter === tab.key }"
+            :aria-selected="filter === tab.key"
+            @click="pickFilter(tab.key)"
+          >
+            {{ tab.label }}
+            <span class="tab-count" :class="{ urgent: tab.urgent && counts[tab.key || 'all'] }">{{ counts[tab.key || 'all'] ?? 0 }}</span>
+          </button>
+        </template>
       </div>
-      <el-table :data="posts" empty-text="没有内容">
-        <el-table-column label="标题" min-width="120" show-overflow-tooltip>
+      <el-table :data="shownPosts" empty-text="没有内容" @row-click="openDetail" row-class-name="row">
+        <el-table-column label="内容" min-width="260">
           <template #default="{ row }">
-            <StatusTag class="kind">{{ row.kind === 'article' ? '图文' : '视频' }}</StatusTag>
-            <!-- el-link 是 inline-flex，标题过长时整个被截掉，所以用普通文字 -->
-            <span class="title-link" @click="openDetail(row)">{{ row.title }}</span>
+            <div class="content-cell">
+              <img v-if="row.cover_url" :src="row.cover_url" class="thumb" :class="row.kind" alt="" />
+              <span v-else class="thumb placeholder" :class="row.kind" aria-hidden="true">
+                <el-icon :size="16"><VideoPlay v-if="row.kind === 'video'" /><Document v-else /></el-icon>
+              </span>
+              <span class="content-text">
+                <span class="title">{{ row.title }}</span>
+                <span class="tip">{{ row.kind === 'article' ? '图文' : '视频' }} · {{ categoryPath(categories, row.category_id) || '未分类' }}</span>
+              </span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="分类" min-width="80" show-overflow-tooltip>
+        <el-table-column label="发布账号" min-width="140">
           <template #default="{ row }">
-            <span v-if="row.category_id">{{ categoryPath(categories, row.category_id) }}</span>
-            <span v-else class="tip">未分类</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="发布账号" min-width="110" show-overflow-tooltip>
-          <template #default="{ row }">
-            <template v-if="row.account"><PlatformIcon :platform="row.account.platform" /> {{ row.account.display_name }}</template>
+            <span v-if="row.account" class="with-icon"><PlatformIcon :platform="row.account.platform" :size="18" />{{ row.account.display_name }}</span>
             <span v-else-if="row.account_name" class="tip">{{ row.account_name }}（已移除）</span>
             <span v-else-if="row.review_status === 'draft'" class="tip">未选择</span>
             <span v-else class="warn">账号已移除，请修改</span>
           </template>
         </el-table-column>
-        <el-table-column label="定时" width="135">
-          <template #default="{ row }">{{ row.scheduled_at ? formatTime(row.scheduled_at) : '立即' }}</template>
-        </el-table-column>
-        <el-table-column label="提交" width="135">
+        <el-table-column label="状态" width="130">
           <template #default="{ row }">
-            <div>{{ row.creator_name || '-' }}</div>
-            <div class="tip">{{ formatTime(row.updated_at) }}</div>
+            <div class="status-cell">
+              <StatusTag :tone="POST_STATUS[postStatus(row)].tone">{{ postStatusLabel(row) }}</StatusTag>
+              <span v-if="row.review_status === 'rejected' && row.review_note" class="warn ellipsis" :title="row.review_note">{{ row.review_note }}</span>
+              <span v-else-if="row.account && row.account.status !== 'active' && postStatus(row) !== 'published'" class="warn">账号登录失效</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="审核" width="90">
+        <el-table-column label="时间" width="150">
           <template #default="{ row }">
-            <!-- 退回原因放在悬停提示里，省一列 -->
-            <el-tooltip :disabled="!row.review_note" :content="`退回原因：${row.review_note}`" placement="top">
-              <StatusTag :tone="REVIEW_STATUS[row.review_status].tone">{{ REVIEW_STATUS[row.review_status].label }}</StatusTag>
-            </el-tooltip>
+            <div>{{ rowTime(row).value }}</div>
+            <div class="tip">{{ rowTime(row).label }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="发布" width="100">
-          <template #default="{ row }">
-            <StatusTag v-if="row.publish_status" :tone="PUBLISH_STATUS[row.publish_status].tone">{{ PUBLISH_STATUS[row.publish_status].label }}</StatusTag>
-            <StatusTag v-else-if="row.review_status === 'approved'" tone="blue">未发布</StatusTag>
-          </template>
+        <el-table-column label="提交人" width="100" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.creator_name || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="150" align="right">
           <template #default="{ row }">
-            <!-- 审核要先看内容，在详情里通过或退回 -->
-            <el-button v-if="row.review_status === 'pending'" link type="success" @click="openDetail(row)">审核</el-button>
-            <el-button v-if="row.review_status === 'approved' && !row.publish_status" link type="primary" @click="openPublish(row)">发布</el-button>
-            <el-button v-if="row.publish_status" link type="primary" @click="$router.push({ name: 'tasks' })">发布记录</el-button>
-            <template v-if="isEditable(row)">
-              <el-button link type="primary" @click="edit(row)">修改</el-button>
-              <el-button link type="danger" @click="remove(row)">删除</el-button>
-            </template>
-            <el-button link type="primary" @click="copy(row)">复制</el-button>
+            <!-- 点行打开详情，按钮要拦住冒泡 -->
+            <span class="ops" @click.stop>
+              <el-button v-if="primaryAction(row)" size="small" :type="primaryAction(row).type" @click="primaryAction(row).run(row)">
+                {{ primaryAction(row).label }}
+              </el-button>
+              <el-dropdown trigger="click" @command="(cmd) => moreAction(cmd, row)">
+                <el-button size="small" text :icon="MoreFilled" aria-label="更多操作" />
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="detail">详情</el-dropdown-item>
+                    <el-dropdown-item v-if="isEditable(row) && primaryAction(row)?.label !== '修改' && primaryAction(row)?.label !== '继续编辑'" command="edit">修改</el-dropdown-item>
+                    <el-dropdown-item command="copy">复制到其他分类</el-dropdown-item>
+                    <el-dropdown-item v-if="isEditable(row)" command="remove" divided class="danger-item">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </span>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <el-drawer v-model="detailVisible" :title="detail?.title" size="50%">
-      <template v-if="detail">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="审核状态">{{ REVIEW_STATUS[detail.review_status].label }}</el-descriptions-item>
-          <el-descriptions-item label="发布状态">
-            {{ detail.publish_status ? PUBLISH_STATUS[detail.publish_status].label : detail.review_status === 'approved' ? '未发布' : '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detail.review_note" label="审核意见">{{ detail.review_note }}</el-descriptions-item>
-          <el-descriptions-item label="发布账号">
-            <template v-if="!detail.account">{{ detail.account_name ? `${detail.account_name}（已移除）` : '-' }}</template>
-            <template v-else>
-              {{ PLATFORMS[detail.account.platform] }} · {{ detail.account.display_name }}
-              <span v-if="detail.account.status !== 'active'" class="warn">（登录已失效）</span>
-            </template>
-          </el-descriptions-item>
-          <el-descriptions-item label="分类">{{ categoryPath(categories, detail.category_id) || '未分类' }}</el-descriptions-item>
-          <el-descriptions-item label="定时">{{ detail.scheduled_at ? formatTime(detail.scheduled_at) : '立即' }}</el-descriptions-item>
-          <template v-if="detail.kind === 'video'">
-            <el-descriptions-item label="描述"><div class="pre">{{ detail.description || '-' }}</div></el-descriptions-item>
-            <el-descriptions-item label="话题">{{ detail.tags.map((t) => `#${t}`).join(' ') || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="封面">
-              <img v-if="detail.cover_url" :src="detail.cover_url" class="video-cover" alt="封面" />
-              <span v-else>平台自动生成</span>
-            </el-descriptions-item>
-            <!-- 平台专属配置 -->
-            <el-descriptions-item v-for="(value, key) in detail.options" :key="key" :label="VIDEO_OPTION_LABELS[key]?.label ?? key">
-              <img v-if="VIDEO_OPTION_LABELS[key]?.image" :src="value" class="video-cover landscape" alt="" />
-              <template v-else>{{ value }}</template>
-            </el-descriptions-item>
-          </template>
-          <template v-else>
-            <el-descriptions-item label="作者">{{ detail.author || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="摘要">{{ detail.description || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="发布方式">{{ detail.draft_only ? '只存到草稿箱' : '直接发表（对外可见）' }}</el-descriptions-item>
-            <el-descriptions-item v-if="detail.source_url" label="原文链接">{{ detail.source_url }}</el-descriptions-item>
-          </template>
-        </el-descriptions>
-        <video v-if="detail.video_url" :src="detail.video_url" controls class="video" />
-        <template v-else>
-          <img :src="detail.cover_url" class="cover" alt="封面" />
-          <div class="article" v-html="articleHtml"></div>
-        </template>
-        <div v-if="detail.review_status === 'pending'" class="actions">
-          <el-button type="success" @click="approve(detail)">审核通过</el-button>
-          <el-button type="warning" @click="openReject(detail)">退回</el-button>
-        </div>
-        <div class="actions">
-          <el-button v-if="detail.review_status === 'approved' && !detail.publish_status" type="primary" @click="openPublish(detail)">发布</el-button>
-          <el-button v-if="isEditable(detail)" @click="edit(detail)">修改</el-button>
-          <el-button @click="copy(detail)">复制</el-button>
-        </div>
-      </template>
+    <el-drawer v-model="detailVisible" :with-header="false" size="min(720px, 92%)" class="detail-drawer">
+      <PostDetail
+        v-if="detail"
+        :post="detail"
+        :categories="categories"
+        @close="detailVisible = false"
+        @refresh="refresh"
+        @approve="approve"
+        @reject="openReject"
+        @publish="openPublish"
+        @edit="edit"
+        @copy="copy"
+        @remove="remove"
+      />
     </el-drawer>
 
     <!-- 新建、修改：视频字段少用弹窗；图文有正文编辑器，用宽抽屉 -->
@@ -252,22 +240,25 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { ArrowDown, Document, MoreFilled, Plus, Search, VideoPlay } from '@element-plus/icons-vue'
 
 import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
 import PageHeader from '../components/PageHeader.vue'
 import PlatformIcon from '../components/PlatformIcon.vue'
+import PostDetail from '../components/PostDetail.vue'
 import StatusTag from '../components/StatusTag.vue'
 import VideoForm from '../components/VideoForm.vue'
 import { buildTree, categoryKind, categoryPath } from '../categories'
-import { cleanHtml } from '../html'
-import { PLATFORMS, PUBLISH_STATUS, REVIEW_STATUS, VIDEO_OPTION_LABELS, formatTime, isEditable } from '../platforms'
+import { refreshBadges } from '../badges'
+import { PLATFORMS, POST_STATUS, POST_TABS, formatTime, isEditable, postStatus, postStatusLabel } from '../platforms'
 
 const route = useRoute()
 const router = useRouter()
 const filter = ref(route.query.status ?? 'pending')
 const posts = ref([])
+const counts = ref({})
+const keyword = ref('')
 const categories = ref([])
 // 左侧选中的分类：'all' 全部、'none' 未分类，其余是分类 id（包含下级分类的内容）
 const category = ref('all')
@@ -295,7 +286,22 @@ const formCategory = ref(null)
 const formRef = ref(null)
 const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 
-const articleHtml = computed(() => cleanHtml(detail.value?.content ?? ''))
+// 搜索只在已加载的这一页里按标题过滤
+const shownPosts = computed(() => {
+  const k = keyword.value.trim().toLowerCase()
+  return k ? posts.value.filter((p) => p.title.toLowerCase().includes(k)) : posts.value
+})
+
+// 新建菜单：绑定了账号的分类按视频、图文分组，当前选中的分类排在最前
+const createGroups = computed(() => {
+  const groups = [
+    { kind: 'video', label: '视频', items: [] },
+    { kind: 'article', label: '图文', items: [] },
+  ]
+  for (const c of categories.value) groups.find((g) => g.kind === categoryKind(c))?.items.push(c)
+  for (const g of groups) g.items.sort((a, b) => (b.id === category.value) - (a.id === category.value))
+  return groups.filter((g) => g.items.length)
+})
 
 const sideTree = computed(() => {
   const toNode = (c) => ({ key: c.id, label: c.name, account: c.account, children: c.children.map(toNode) })
@@ -318,11 +324,60 @@ const copyTree = computed(() => {
 
 async function load() {
   const params = {}
-  if (filter.value) params.status = filter.value
   if (category.value === 'none') params.uncategorized = true
   else if (category.value !== 'all') params.category_id = category.value
   if (mine.value) params.mine = true
-  posts.value = (await api.get('/posts', { params })).data
+  const [list, count] = await Promise.all([
+    api.get('/posts', { params: filter.value ? { ...params, status: filter.value } : params }),
+    // 页签上的数量跟着分类、「只看我提交的」筛选
+    api.get('/posts/counts', { params }),
+  ])
+  posts.value = list.data
+  counts.value = count.data
+  refreshBadges()
+}
+
+function pickFilter(key) {
+  filter.value = key
+  router.replace({ query: { ...route.query, status: key } })
+  load()
+}
+
+function createIn(categoryId) {
+  const c = categories.value.find((item) => item.id === categoryId)
+  openForm(categoryKind(c), null, null, categoryId)
+}
+
+// 时间列：定时的显示定时，审核过的显示审核时间，其他显示最后修改
+function rowTime(row) {
+  if (row.scheduled_at) return { value: formatTime(row.scheduled_at), label: '定时' }
+  if (row.reviewed_at && row.review_status !== 'pending') {
+    return { value: formatTime(row.reviewed_at), label: row.review_status === 'rejected' ? '退回' : '审核通过' }
+  }
+  return { value: formatTime(row.updated_at), label: row.review_status === 'draft' ? '最后保存' : '提交' }
+}
+
+// 每行只放一个最该做的操作，其余在「更多」里
+function primaryAction(row) {
+  switch (postStatus(row)) {
+    case 'draft':
+      return { label: '继续编辑', type: 'default', run: edit }
+    case 'pending':
+      // 审核要先看内容，在详情里通过或退回
+      return { label: '审核', type: 'primary', run: openDetail }
+    case 'rejected':
+      return { label: '修改', type: 'default', run: edit }
+    case 'to_publish':
+      return { label: '发布', type: 'primary', run: openPublish }
+    case 'failed':
+      return { label: '查看原因', type: 'default', run: openDetail }
+    default:
+      return null
+  }
+}
+
+function moreAction(command, row) {
+  ;({ detail: openDetail, edit, copy, remove })[command](row)
 }
 
 async function loadCategories() {
@@ -398,9 +453,9 @@ async function publish() {
     const scheduledAt = publishMode.value === 'schedule' ? publishAt.value.toISOString() : null
     await api.post(`/posts/${publishing.value.id}/publish`, { scheduled_at: scheduledAt })
     publishVisible.value = false
-    detailVisible.value = false
-    ElMessage.success('已提交发布')
-    router.push({ name: 'tasks' })
+    ElMessage.success('已提交发布，可以在详情里看进度')
+    await load()
+    await openDetail(publishing.value)
   } finally {
     busy.value = false
   }
@@ -494,8 +549,11 @@ onMounted(async () => {
   gap: 16px;
   align-items: flex-start;
 }
+.search {
+  width: 220px;
+}
 .side {
-  flex: 0 0 200px;
+  flex: 0 0 220px;
   box-sizing: border-box;
   padding: 12px;
 }
@@ -508,103 +566,216 @@ onMounted(async () => {
   margin-bottom: 4px;
   font-weight: 600;
 }
-.main {
-  flex: 1;
-  min-width: 0;
-  padding: 12px 16px 16px;
-}
-.filters {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.tip {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.warn {
-  color: var(--el-color-danger);
-  font-size: 12px;
-}
-.pre {
-  white-space: pre-wrap;
-}
-.video {
-  width: 100%;
-  max-height: 480px;
-  margin-top: 16px;
-  background: #000;
-}
-.kind {
-  margin-right: 6px;
-}
-.title-link {
-  color: var(--el-color-primary);
-  cursor: pointer;
-}
-.title-link:hover {
-  text-decoration: underline;
-}
-.video-cover {
-  display: block;
-  width: 90px;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-.video-cover.landscape {
-  width: 160px;
-}
-.cover {
-  width: 270px;
-  height: 115px;
-  object-fit: cover;
-  margin-top: 16px;
-  border-radius: 4px;
-}
-.article {
-  margin-top: 12px;
-  padding: 8px 12px;
-  line-height: 1.7;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-}
-.article :deep(img) {
-  max-width: 100%;
-}
-.actions {
-  margin-top: 16px;
-}
-.copy-tip {
-  margin-top: 8px;
-}
-.with-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
+/* 分类名下面一行显示绑定的账号，树节点要比默认的高 */
+.side :deep(.el-tree-node__content) {
+  height: auto;
+  min-height: 32px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-radius: 6px;
 }
 .node {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 .node-name {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dim {
-  opacity: 0.4;
+.node-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--mp-panel-border);
+  overflow-x: auto;
+}
+.tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  font: inherit;
+  cursor: pointer;
+}
+.tab:hover {
+  background: var(--el-fill-color-light);
+}
+.tab.active {
+  background: var(--mp-nav-active-bg);
+  color: var(--mp-nav-active-fg);
+  font-weight: 600;
+}
+.tab-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #f0f1f3;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  text-align: center;
+}
+.tab-count.urgent {
+  background: #fff1d6;
+  color: #8a5300;
+}
+.tab-sep {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--mp-panel-border);
+}
+.main :deep(.row) {
+  cursor: pointer;
+}
+.content-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.thumb {
+  flex: none;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+/* 视频竖封面 3:4，图文封面横的 */
+.thumb.video {
+  width: 36px;
+}
+.thumb.article {
+  width: 64px;
+}
+.thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e8ebf1;
+  color: var(--el-text-color-secondary);
+}
+.content-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.title {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.ellipsis {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tip {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.warn {
+  color: #b42318;
+  font-size: 12px;
+}
+.copy-tip {
+  margin-top: 8px;
 }
 .publish-form {
   margin-top: 16px;
+}
+.create-menu {
+  width: 340px;
+}
+.create-title {
+  padding: 8px 16px;
+  font-weight: 600;
+}
+.create-group {
+  padding: 8px 16px 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.create-menu :deep(.el-dropdown-menu__item),
+.create-menu.el-dropdown-menu .el-dropdown-menu__item {
+  padding: 8px 16px;
+  line-height: 1.4;
+}
+.create-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.create-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.create-empty {
+  margin: 0;
+  padding: 8px 16px;
+}
+.create-foot {
+  margin-top: 4px;
+  padding: 10px 16px 6px;
+  border-top: 1px solid var(--mp-panel-border);
+}
+.danger-item {
+  color: var(--el-color-danger);
+}
+</style>
+<style>
+/* 抽屉挂在 body 下，scoped 样式管不到；详情自己排版，去掉默认内边距 */
+.detail-drawer .el-drawer__body {
+  padding: 0;
 }
 </style>

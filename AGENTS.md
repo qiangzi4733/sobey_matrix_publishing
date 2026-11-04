@@ -54,8 +54,8 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
 - `backend/app/tasks.py`：所有 Celery 任务；`PUBLISHABLE`、`BROWSER_PLATFORMS` 控制平台能力；`enqueue_publish` 按平台选队列。
 - `backend/app/platforms/`：每个平台一个模块。`base.py` 定义 `LoginExpired` / `PublishError(message, screenshot)`；`browser.py` 是浏览器类平台共用的启动/截图工具和 `AskCode` 类型；`scheduling.py` 定义哪些平台用**平台原生定时**；`video_options.py` 定义发布视频时各平台的标题字数上限和**专属配置**；`channels.py` 视频号、`douyin.py` 抖音。`tasks._browser_module()` 按平台取模块。
 - `backend/app/login_sessions.py`：扫码登录会话（Redis，15 分钟过期），worker 写二维码和进度，前端每 2 秒轮询。
-- `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；发布记录里出现「输入验证码」按钮。
-- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`categories`（内容分类）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，任务列表、重试、失败截图）。
+- `backend/app/verification.py`：**短信验证码中转**。平台中途要求验证码时，worker 把验证弹窗截图推给前端并等待客户输入（scope：登录 `login:{id}`、发布 `task:{id}`）。前端：扫码弹窗里出现输入框；内容详情里出现验证码输入框（发布中每 5 秒刷新）。
+- `backend/app/routers/`：`auth`（注册/登录/JWT）、`accounts`（账号、扫码登录、检测）、`categories`（内容分类）、`posts`（视频/图文的提交审核、修改、通过、退回、发布、删除，各状态条数 `/posts/counts`，单条内容的发布记录 `/posts/{id}/tasks`、重试、失败截图）。
 - `frontend/src/platforms.js`：前端的平台名称和能力列表，接入新平台时同步修改。
 - `backend/app/platforms/wechat_mp.py`：公众号第三方平台授权（ticket → component token → 预授权码 → auth_code → refresh_token）和草稿/发表；`wechat_crypto.py` 推送消息的签名与加解密；`routers/wechat_mp.py` 发起授权、回调、授权事件接收 URL（`/api/wechat-mp/events`）。
 - `backend/app/mock_wechat.py`：`WECHAT_MP_MOCK=true` 时挂载的「开放平台」模拟：按官方格式模拟 ticket 推送（beat 每 10 分钟）、第三方平台接口和授权确认页；授权方 access_token 用测试公众号 AppID/AppSecret 真实换取，草稿/发表走真实接口。`/api/mock-wx/push-ticket`、`/push-unauthorized` 可手动触发推送。**生产必须关闭**。
@@ -83,20 +83,20 @@ backend (FastAPI)  ── PostgreSQL（业务数据）
   - 审核通过后人手动点「发布」才生成 `PublishTask`（之后的排队、定时、重试不变）；点「发布」时锁住内容行，**重新校验账号状态和定时范围**（审核期间可能过期），可以改定时。
   - **没点过发布、或这一轮发布失败的内容可以修改、删除**，其他（发布中、已定时、已发布）不能。发布失败后修改会清空 `current_task`、回到待审核，旧任务留在发布记录里但不能再重试（`can_retry`，重试和修改都锁内容行，互斥）。前端修改失败内容前提醒客户先去平台确认没有发出去（有些失败发生在点了平台发布按钮之后）。
   - 审核状态变更按当前状态条件 `UPDATE`，重复点击只生效一次。目前同一租户任何用户都能审核（包括审核自己提交的），以后做基于角色的权限。
-  - 内容列表按「要谁处理」分页签：草稿、待审核、已退回、待发布、发布中、已定时、已发布、发布失败、全部（后端 `GET /api/posts?status=`）。列表里审核要点进详情（先看内容再通过/退回）。
+  - 内容列表按「要谁处理」分页签：全部 | 草稿、待审核、已退回 | 待发布、发布中、已定时、已发布、发布失败（后端 `GET /api/posts?status=`，页签上的数量来自 `GET /api/posts/counts`，两者共用 `_status_filter`）。列表只显示一个合并后的状态（`platforms.js` 的 `postStatus`），每行一个主操作、其余在「更多」里；点行或「审核」打开详情（先看内容再通过/退回）。
   - 迁移 0006：旧的「已发布」改为「已通过」+ `current_task_id` 指向最新任务，旧内容的 `account_id` 从发布任务补上；账号已移除的显示任务里记下的 `account_name`。
 - **视频表单 = 通用字段 + 平台专属配置**（2026-11-03，用户确认）：视频、竖封面（3:4，可不传）、标题、描述、话题、分类、定时是通用字段，存在 `Post` 上；只有某个平台才有的选项存 `Post.options`（JSON），每个平台一个 pydantic 模型（`video_options.py`，`extra="forbid"`），提交时按所选账号的平台校验，标题字数上限也按平台。图片字段接口里传 `/api/video-covers/...` 地址、库里存相对 media_dir 的路径。账号由分类决定（见「分类绑定账号」），表单里的字数、定时提示跟着账号的平台变，专属配置组件放 `components/video-options/`、登记在 `VideoForm.vue` 的 `OPTION_FORMS`；只有分类没绑定账号的老内容修改时能自己选账号，换成其他平台的账号时确认后清空专属配置。复制到同平台账号时沿用配置。视频封面和图文图片一样不随内容删除（复制出来的内容共用）。加新选项：后端模型 + 前端组件 + `platforms.js` 的 `VIDEO_OPTION_LABELS`（详情页显示名）+ 平台模块读取。
 - **前端入口是「内容管理」页**（`views/Contents.vue`）：列表里完成新建、修改、审核、发布、删除。发布视频用弹窗、发布图文用宽抽屉（表单组件 `components/VideoForm.vue` / `ArticleForm.vue`）；有未提交的改动时关闭要确认，提交中不能关。旧地址 `/publish`、`/publish-article`、`/review` 都重定向到这里。
 - **内容分类**（2026-11-03）：租户内多级分类，层数不限（2026-11-04 去掉了 3 层限制），一条内容一个分类。按分类筛选时包含下级分类；有下级分类或内容的分类不能删除（不自动改成未分类）。分类的增删改在左侧菜单的「分类与绑定」页（`views/Categories.vue`，2026-11-04 从内容管理的弹窗挪出来，原名「分类管理」），内容管理页左侧只是分类树（筛选用），另有「只看我提交的」筛选。以后做权限时按分类给用户分配可管理范围（用户已确认）。
 - **分类绑定账号**（2026-11-04，用户确认）：客户用分类管理账号。分类可以绑定一个账号（界面上先选渠道再选账号，库里只存 `Category.account_id`，快手未开放不能选）；一个账号可以绑多个分类。
-  - 绑定只对这个分类自己生效，**下级分类不沿用上级的**。内容管理页只有选中绑定了账号的分类才显示新建按钮：绑公众号显示「发布图文」，绑抖音/视频号显示「发布视频」；「全部」「未分类」和没绑定的分类显示「去设置」引导。
+  - 绑定只对这个分类自己生效，**下级分类不沿用上级的**。新建统一走内容管理右上角的「新建内容」菜单：列出绑定了账号的分类（按视频/图文分组，账号登录失效的也能选、先写稿），选了分类就决定账号和表单；没有可选的分类时引导去「分类与绑定」。
   - 新建（包括复制）必须放进绑定了账号的分类，账号由分类决定，客户不能改；**内容建好后分类不能改**（「移到分类」功能已删除，表单里分类只显示）。
   - 改绑定只影响之后：草稿在提交审核时用分类当前的账号；已提交的内容修改时沿用原账号，原账号被移除了才改用分类的；分类没绑定账号的老内容修改时客户自己选。规则在后端 `posts._edit_account_id`，前端两个表单里有同样的判断。
   - 账号被移除时分类的绑定由外键置空，移除前提示影响几个分类。分类树上绑定的账号登录失效时标「需重新登录」。
 - **复制**：内容列表和详情可以复制任意状态的内容，选一个绑定了同类渠道的目标分类再提交（发到那个分类的账号，定时清空）。视频提交时带 `copy_from`，后端给原视频建硬链接，不重新上传、也不和原内容共用路径（删除内容会删视频文件）；图文直接引用同一批图片（正文图片和封面不随内容删除）。视频只能复制到视频渠道、图文只能到公众号。
 - 审核预览视频用 `/api/posts/{id}/video?token=`：`<video>` 带不上登录头，令牌只对这一个视频有效、2 小时过期（`security.create_video_token`）。用户提交的正文 HTML 放进页面前都要经过前端 `src/html.js` 的 `cleanHtml`。
 - 代码风格：中文注释，只写「为什么」；跟随周围代码的命名和写法；不加无用的抽象。
-- **UI 重构**（2026-11-04 开始，用户确认方向）：设计稿在 Claude 画布「矩阵分发平台 UI 重构」（https://claude.ai/artifact/Da6jWWWW8SkyeCpbbnWUyc，共 10 张），分 5 步做：① 主题、公共组件、左侧导航（已完成）② 内容管理和详情（状态合并成一列、页签带数量、新建先选分类、发布记录并进详情后删掉单独页面）③ 视频/图文表单改全屏页 + 预览和提交前检查 ④ 账号卡片、分类与绑定左右分栏 ⑤ 工作台首页、登录页、手机适配。
+- **UI 重构**（2026-11-04 开始，用户确认方向）：设计稿在 Claude 画布「矩阵分发平台 UI 重构」（https://claude.ai/artifact/Da6jWWWW8SkyeCpbbnWUyc，共 10 张），分 5 步做：① 主题、公共组件、左侧导航（已完成）② 内容管理和详情（已完成：状态合并成一列、页签带数量、新建先选分类、发布记录并进详情 `components/PostDetail.vue`，单独的发布记录页已删、`/tasks` 重定向到内容管理；导航角标在 `src/badges.js`）③ 视频/图文表单改全屏页 + 预览和提交前检查 ④ 账号卡片、分类与绑定左右分栏 ⑤ 工作台首页、登录页、手机适配。
   - 继续用 Element Plus，外观靠 `src/theme.css` 覆盖它的 CSS 变量（改主色要把 light-N / dark-2 一起改）；自己的变量用 `--mp-` 前缀，白色卡片用 `.mp-panel`。
   - 不用 Google Fonts（国内访问不了），用系统中文字体。
   - 状态一律用 `components/StatusTag.vue`（`tone`：gray/amber/red/blue/sky/purple/green），`platforms.js` 里的状态定义带 `tone`；页面标题用 `components/PageHeader.vue`，主操作放在它的默认插槽里；平台图标仍用 `PlatformIcon.vue`（真实 logo，设计稿里的字母方块只是占位）。
