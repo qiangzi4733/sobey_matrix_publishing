@@ -1,8 +1,7 @@
 <template>
   <div>
-    <PageHeader title="工作台" :description="summary">
-      <el-button type="primary" :icon="Plus" @click="router.push({ name: 'contents' })">新建内容</el-button>
-    </PageHeader>
+    <!-- 新建要先选分类，入口只在内容管理 -->
+    <PageHeader title="工作台" :description="summary" />
 
     <!-- 账号失效最影响发布，放最上面 -->
     <div v-for="a in expiredAccounts" :key="a.id" class="alert" role="alert">
@@ -76,7 +75,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, WarningFilled } from '@element-plus/icons-vue'
+import { WarningFilled } from '@element-plus/icons-vue'
 
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'

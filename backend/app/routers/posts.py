@@ -513,13 +513,9 @@ def _status_filter(status_: str, now: datetime):
     return task.status == PublishStatus.failed
 
 
-def _scope_filters(query, db: DbSession, user: CurrentUser, category_id: int | None, uncategorized: bool, mine: bool):
+def _scope_filters(query, db: DbSession, user: CurrentUser, category_id: int | None):
     if category_id is not None:
         query = query.where(Post.category_id.in_(subtree_ids(db, user, category_id)))
-    elif uncategorized:
-        query = query.where(Post.category_id.is_(None))
-    if mine:
-        query = query.where(Post.created_by == user.id)
     return query
 
 
@@ -529,12 +525,10 @@ def list_posts(
     user: CurrentUser,
     status_: Annotated[ListStatus | None, Query(alias="status")] = None,
     category_id: int | None = None,
-    uncategorized: bool = False,
-    mine: bool = False,
     limit: int = 100,
 ) -> list[PostOut]:
-    """status 按「要谁处理」分组，见 ListStatus；category_id 包含下级分类；uncategorized 只看未分类；mine 只看自己提交的。"""
-    query = _scope_filters(_visible_posts(user), db, user, category_id, uncategorized, mine)
+    """status 按「要谁处理」分组，见 ListStatus；category_id 包含下级分类；未分类的老内容只在不传 category_id 时出现。"""
+    query = _scope_filters(_visible_posts(user), db, user, category_id)
     if status_:
         query = query.where(_status_filter(status_, datetime.now(UTC)))
     rows = db.scalars(
@@ -557,14 +551,12 @@ def count_posts(
     db: DbSession,
     user: CurrentUser,
     category_id: int | None = None,
-    uncategorized: bool = False,
-    mine: bool = False,
 ) -> dict[str, int]:
     """各状态分组的条数（筛选条件和列表相同），all 是全部。一次查询用 FILTER 统计所有分组。"""
     now = datetime.now(UTC)
     groups = get_args(ListStatus)
     columns = [func.count().filter(_status_filter(name, now)).label(name) for name in groups]
-    query = _scope_filters(_visible_posts(user), db, user, category_id, uncategorized, mine).with_only_columns(
+    query = _scope_filters(_visible_posts(user), db, user, category_id).with_only_columns(
         func.count().label("all"), *columns
     )
     return dict(db.execute(query).one()._mapping)

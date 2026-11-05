@@ -1,35 +1,12 @@
 <template>
   <PageHeader title="内容管理">
     <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索标题" clearable class="search" />
-    <el-checkbox v-model="mine" @change="load">只看我提交的</el-checkbox>
-    <!-- 新建先选分类：分类决定发到哪个账号、发视频还是图文 -->
-    <el-dropdown trigger="click" placement="bottom-end" @command="createIn">
-      <el-button type="primary" :icon="Plus">新建内容<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
-      <template #dropdown>
-        <el-dropdown-menu class="create-menu">
-          <li class="create-title" role="presentation">发到哪个分类？</li>
-          <template v-if="createGroups.length">
-            <template v-for="group in createGroups" :key="group.kind">
-              <li class="create-group" role="presentation">{{ group.label }}</li>
-              <el-dropdown-item v-for="c in group.items" :key="c.id" :command="c.id">
-                <span class="create-item">
-                  <PlatformIcon :platform="c.account.platform" :size="22" />
-                  <span class="create-text">
-                    <span>{{ categoryPath(categories, c.id) }}</span>
-                    <span :class="c.account.status === 'active' ? 'tip' : 'warn'">
-                      {{ PLATFORMS[c.account.platform] }} {{ c.account.display_name }}{{ c.account.status === 'active' ? '' : ' · 登录已失效，可以先写稿' }}
-                    </span>
-                  </span>
-                  <span v-if="c.id === category" class="tip">当前分类</span>
-                </span>
-              </el-dropdown-item>
-            </template>
-          </template>
-          <li v-else class="create-empty tip" role="presentation">还没有绑定了账号的分类</li>
-          <li class="create-foot tip" role="presentation">没有合适的分类？<el-button link type="primary" @click="goSetup">去给分类绑定账号</el-button></li>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
+    <!-- 新建放进选中的分类，分类绑定的账号决定发到哪、发视频还是图文 -->
+    <el-button v-if="currentKind" type="primary" :icon="Plus" @click="createIn(current)">
+      {{ currentKind === 'video' ? '新建视频' : '新建图文' }} · {{ current.account.display_name }}
+    </el-button>
+    <span v-else-if="category === 'all'" class="tip">选择左侧分类后新建</span>
+    <span v-else class="tip">该分类未绑定账号，<el-button link type="primary" @click="goSetup">去分类管理设置</el-button></span>
   </PageHeader>
   <div class="page">
     <div class="side mp-panel">
@@ -233,7 +210,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Document, MoreFilled, Plus, Search, VideoPlay } from '@element-plus/icons-vue'
+import { Document, MoreFilled, Plus, Search, VideoPlay } from '@element-plus/icons-vue'
 
 import api from '../api'
 import ArticleForm from '../components/ArticleForm.vue'
@@ -253,9 +230,8 @@ const posts = ref([])
 const counts = ref({})
 const keyword = ref('')
 const categories = ref([])
-// 左侧选中的分类：'all' 全部、'none' 未分类，其余是分类 id（包含下级分类的内容）
+// 左侧选中的分类：'all' 全部（未分类的老内容只在这里），其余是分类 id（包含下级分类的内容）
 const category = ref('all')
-const mine = ref(false)
 const copyVisible = ref(false)
 const copying = ref(null)
 const copyTarget = ref(null)
@@ -286,20 +262,9 @@ const shownPosts = computed(() => {
   return k ? posts.value.filter((p) => p.title.toLowerCase().includes(k)) : posts.value
 })
 
-// 新建菜单：绑定了账号的分类按视频、图文分组，当前选中的分类排在最前
-const createGroups = computed(() => {
-  const groups = [
-    { kind: 'video', label: '视频', items: [] },
-    { kind: 'article', label: '图文', items: [] },
-  ]
-  for (const c of categories.value) groups.find((g) => g.kind === categoryKind(c))?.items.push(c)
-  for (const g of groups) g.items.sort((a, b) => (b.id === category.value) - (a.id === category.value))
-  return groups.filter((g) => g.items.length)
-})
-
 const sideTree = computed(() => {
   const toNode = (c) => ({ key: c.id, label: c.name, account: c.account, children: c.children.map(toNode) })
-  return [{ key: 'all', label: '全部' }, { key: 'none', label: '未分类' }, ...buildTree(categories.value).map(toNode)]
+  return [{ key: 'all', label: '全部' }, ...buildTree(categories.value).map(toNode)]
 })
 const current = computed(() => categories.value.find((c) => c.id === category.value) ?? null)
 const currentKind = computed(() => categoryKind(current.value))
@@ -318,12 +283,10 @@ const copyTree = computed(() => {
 
 async function load() {
   const params = {}
-  if (category.value === 'none') params.uncategorized = true
-  else if (category.value !== 'all') params.category_id = category.value
-  if (mine.value) params.mine = true
+  if (category.value !== 'all') params.category_id = category.value
   const [list, count] = await Promise.all([
     api.get('/posts', { params: filter.value ? { ...params, status: filter.value } : params }),
-    // 页签上的数量跟着分类、「只看我提交的」筛选
+    // 页签上的数量跟着分类筛选
     api.get('/posts/counts', { params }),
   ])
   posts.value = list.data
@@ -337,9 +300,8 @@ function pickFilter(key) {
   load()
 }
 
-function createIn(categoryId) {
-  const c = categories.value.find((item) => item.id === categoryId)
-  openForm(categoryKind(c), null, null, categoryId)
+function createIn(c) {
+  openForm(categoryKind(c), null, null, c.id)
 }
 
 // 时间列：定时的显示定时，审核过的显示审核时间，其他显示最后修改
@@ -722,45 +684,6 @@ onMounted(async () => {
 }
 .publish-form {
   margin-top: 16px;
-}
-.create-menu {
-  width: 340px;
-}
-.create-title {
-  padding: 8px 16px;
-  font-weight: 600;
-}
-.create-group {
-  padding: 8px 16px 4px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.create-menu :deep(.el-dropdown-menu__item),
-.create-menu.el-dropdown-menu .el-dropdown-menu__item {
-  padding: 8px 16px;
-  line-height: 1.4;
-}
-.create-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-.create-text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.create-empty {
-  margin: 0;
-  padding: 8px 16px;
-}
-.create-foot {
-  margin-top: 4px;
-  padding: 10px 16px 6px;
-  border-top: 1px solid var(--mp-panel-border);
 }
 </style>
 <style>
