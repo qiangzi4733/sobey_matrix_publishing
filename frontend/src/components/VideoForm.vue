@@ -7,7 +7,7 @@
         <template v-if="currentAccount">
           <PlatformIcon :platform="currentAccount.platform" />
           <span>{{ PLATFORMS[currentAccount.platform] }} {{ currentAccount.display_name }}</span>
-          <span v-if="currentAccount.status !== 'active'" class="warn">登录已失效</span>
+          <span v-if="currentAccount.status !== 'active'" class="warn">登录已失效，可以先提交审核，发布前要到「账号管理」重新登录</span>
         </template>
         <span v-else-if="lockedId" class="warn">分类绑定的账号不能发布视频，请到「分类管理」修改</span>
         <span v-else>选择发布账号</span>
@@ -46,6 +46,18 @@
           <el-button @click="fileInput.click()">{{ file || videoUrl ? '更换' : '选择视频' }}</el-button>
           <input ref="fileInput" type="file" accept=".mp4,.mov" hidden @change="pickFile" />
         </div>
+        <div v-if="metaError" class="warn">浏览器读不出这个视频，可能是 H.265 等编码，平台可能无法处理，建议转成 H.264 的 mp4</div>
+        <!-- 播放选中的视频，确认没选错文件；读宽高、时长也靠它。#t=0.1 让浏览器解出第一帧，否则是黑屏 -->
+        <video
+          v-else-if="previewVideo"
+          :key="previewVideo"
+          :src="`${previewVideo}#t=0.1`"
+          class="player"
+          controls
+          preload="metadata"
+          @loadedmetadata="readMeta"
+          @error="metaError = Boolean(file)"
+        />
         <div class="covers">
           <div class="cover-field">
             <span class="field-label">竖封面 3:4 <span class="tip">可不传，由平台自动生成</span></span>
@@ -68,30 +80,6 @@
         </el-form-item>
       </section>
 
-      <section class="section">
-        <h2 class="section-title">发布时间</h2>
-        <div class="when" role="radiogroup" aria-label="发布时间">
-          <label class="when-option" :class="{ active: !scheduleOn }">
-            <input v-model="scheduleOn" type="radio" :value="false" />
-            <span class="when-text">
-              <span>审核通过后手动发布</span>
-              <span class="tip">点「发布」时立即提交给平台</span>
-            </span>
-          </label>
-          <label class="when-option" :class="{ active: scheduleOn }">
-            <input v-model="scheduleOn" type="radio" :value="true" />
-            <span class="when-text">
-              <span>定时发布</span>
-              <span class="tip">{{ scheduleTip }}（北京时间）</span>
-            </span>
-          </label>
-        </div>
-        <el-form-item v-if="scheduleOn" label="发布时间">
-          <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="选择日期和时间" :disabled-date="(d) => d < startOfToday" />
-        </el-form-item>
-        <span class="tip">审核通过点「发布」时还可以修改。</span>
-      </section>
-
       <section v-if="optionsForm" class="section">
         <h2 class="section-title">
           <PlatformIcon :platform="platform" />{{ PLATFORMS[platform] }}专属
@@ -99,27 +87,7 @@
         <component :is="optionsForm" v-model="form.options" />
       </section>
 
-      <template #aside>
-        <section class="section">
-          <h2 class="section-title">{{ platform ? `${PLATFORMS[platform]}里大概长这样` : '预览' }}</h2>
-          <div class="phone">
-            <div class="screen">
-              <img v-if="form.coverUrl" :src="form.coverUrl" class="screen-media" alt="" />
-              <!-- #t=0.1 让浏览器解出第一帧当画面，否则只有黑屏 -->
-              <video v-else-if="previewVideo" :src="`${previewVideo}#t=0.1`" class="screen-media" muted preload="metadata" />
-              <div class="caption">
-                <span class="caption-name">@{{ currentAccount?.display_name ?? '账号' }}</span>
-                <span class="caption-text">{{ caption }}</span>
-              </div>
-            </div>
-          </div>
-          <span class="tip">只是示意，以平台实际显示为准</span>
-        </section>
-        <CheckList :items="checks" />
-      </template>
     </FormShell>
-    <!-- 读本地视频的分辨率和时长，用于提交前检查 -->
-    <video v-if="fileUrl" :src="fileUrl" preload="metadata" hidden @loadedmetadata="readMeta" @error="metaError = true" />
   </el-form>
 </template>
 
@@ -130,8 +98,7 @@ import { Right, VideoPlay } from '@element-plus/icons-vue'
 
 import api from '../api'
 import { categoryPath } from '../categories'
-import { PLATFORMS, VIDEO_PLATFORMS, VIDEO_RULES, formatTime } from '../platforms'
-import CheckList from './CheckList.vue'
+import { PLATFORMS, VIDEO_PLATFORMS, VIDEO_RULES } from '../platforms'
 import CoverUpload from './CoverUpload.vue'
 import FormShell from './FormShell.vue'
 import PlatformIcon from './PlatformIcon.vue'
@@ -140,7 +107,7 @@ import DouyinOptions from './video-options/DouyinOptions.vue'
 // 各平台的专属配置表单，没有专属配置的平台不用登记
 const OPTION_FORMS = { douyin: DouyinOptions }
 
-// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，定时要重新选
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建。立即还是定时在审核通过后点「发布」时选
 const props = defineProps({
   postId: { type: Number, default: null },
   copyFrom: { type: Number, default: null },
@@ -161,7 +128,6 @@ const fileInput = ref(null)
 const fileUrl = ref('')
 const meta = ref(null)
 const metaError = ref(false)
-const scheduleOn = ref(false)
 const submitting = ref(false)
 const progress = ref(0)
 const category = ref(props.categoryId)
@@ -174,18 +140,13 @@ const form = reactive({
   tags: [],
   coverUrl: '',
   accountId: null,
-  scheduledAt: null,
   options: {},
   optionsPlatform: null,
 })
-const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 let saved = ''
 
 const heading = computed(() => (postId ? '修改视频' : copyFrom ? '复制视频' : '发布视频'))
 const previewVideo = computed(() => fileUrl.value || videoUrl.value)
-const caption = computed(() =>
-  [form.title || '标题', form.description, form.tags.map((t) => `#${t}`).join(' ')].filter(Boolean).join(' '),
-)
 
 const accountGroups = computed(() =>
   VIDEO_PLATFORMS.map((platform) => ({ platform, accounts: accounts.value.filter((a) => a.platform === platform) })).filter(
@@ -199,11 +160,6 @@ const platform = computed(() => platformOf(form.accountId))
 const rules = computed(() => VIDEO_RULES[platform.value])
 const titleMax = computed(() => rules.value?.titleMax ?? 200)
 const optionsForm = computed(() => OPTION_FORMS[platform.value])
-const scheduleTip = computed(() =>
-  rules.value
-    ? `${PLATFORMS[platform.value]}需在 ${rules.value.schedule}`
-    : VIDEO_PLATFORMS.map((p) => `${PLATFORMS[p]}需在 ${VIDEO_RULES[p].schedule}`).join('；'),
-)
 
 watch(
   () => form.accountId,
@@ -227,11 +183,6 @@ watch(
   },
 )
 
-// 关掉定时就清空时间，免得提交上去
-watch(scheduleOn, (on) => {
-  if (!on) form.scheduledAt = null
-})
-
 const formatDuration = (seconds) => {
   const s = Math.round(seconds)
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
@@ -246,43 +197,6 @@ const videoSummary = computed(() => {
   }
   parts.push(`${(file.value.size / 1024 / 1024).toFixed(1)} MB`)
   return parts.join(' · ')
-})
-
-// 只检查能确定的事；视频大小、时长的平台上限还没核实，不在这里拦
-const checks = computed(() => {
-  const items = []
-  if (!file.value && !videoUrl.value) items.push({ level: 'error', label: '还没有选择视频' })
-  else if (metaError.value) items.push({ level: 'warn', label: '浏览器读不出这个视频', hint: '可能是 H.265 等编码，平台可能无法处理，建议转成 H.264 的 mp4' })
-  else if (file.value && meta.value) items.push({ level: 'ok', label: '视频可以正常读取', hint: videoSummary.value })
-  else items.push({ level: 'ok', label: file.value ? '视频已选择' : '沿用原视频' })
-
-  const max = titleMax.value
-  if (!form.title.trim()) items.push({ level: 'error', label: '还没有填写标题' })
-  else if (form.title.length > max) items.push({ level: 'error', label: `标题 ${form.title.length} / ${max} 字`, hint: `${PLATFORMS[platform.value]}标题最多 ${max} 字` })
-  else items.push({ level: 'ok', label: `标题 ${form.title.length} / ${max} 字` })
-
-  if (!form.coverUrl) items.push({ level: 'warn', label: '没有上传竖封面', hint: '由平台用视频画面自动生成' })
-  else items.push({ level: 'ok', label: '已上传竖封面' })
-
-  if (scheduleOn.value) {
-    const at = form.scheduledAt
-    const r = rules.value
-    if (!at) items.push({ level: 'warn', label: '还没有选择定时时间', hint: '不选就是审核通过后手动发布' })
-    else if (r) {
-      const minutes = (at - Date.now()) / 60000
-      if (minutes < r.scheduleMin || minutes > r.scheduleDays * 1440) {
-        items.push({ level: 'warn', label: `定时 ${formatTime(at)} 不在范围内`, hint: `${PLATFORMS[platform.value]}只能定在 ${r.schedule}，点「发布」时要改` })
-      } else {
-        items.push({ level: 'ok', label: `定时 ${formatTime(at)}`, hint: `在 ${r.schedule}；审核太久的话发布时可能要改` })
-      }
-    }
-  }
-
-  const a = currentAccount.value
-  if (!a) items.push({ level: 'error', label: '还没有发布账号' })
-  else if (a.status !== 'active') items.push({ level: 'warn', label: `${PLATFORMS[a.platform]} ${a.display_name} 登录已失效`, hint: '可以先提交审核，发布前要到「账号管理」重新登录' })
-  else items.push({ level: 'ok', label: '账号登录正常', hint: `${PLATFORMS[a.platform]} ${a.display_name}` })
-  return items
 })
 
 const snapshot = () => JSON.stringify(form)
@@ -332,7 +246,6 @@ async function submit(draft) {
   body.append('cover_url', form.coverUrl)
   // 没填的项不传，后端按未设置处理
   body.append('options', JSON.stringify(Object.fromEntries(Object.entries(form.options).filter(([, v]) => v))))
-  if (form.scheduledAt) body.append('scheduled_at', form.scheduledAt.toISOString())
 
   submitting.value = true
   progress.value = 0
@@ -370,8 +283,6 @@ onMounted(async () => {
     if (postId) {
       category.value = post.category_id
       form.accountId = post.account?.id ?? null
-      form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
-      scheduleOn.value = Boolean(form.scheduledAt)
       reviewNote.value = post.review_note || ''
       canDraft.value = post.review_status === 'draft'
     }
@@ -465,80 +376,11 @@ onBeforeUnmount(() => {
 .field-label {
   font-weight: 500;
 }
-.when {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-.when-option {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 14px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 10px;
-  cursor: pointer;
-}
-.when-option.active {
-  border-color: var(--el-color-primary);
-  background: #f5f8ff;
-}
-.when-option input {
-  margin-top: 3px;
-  accent-color: var(--el-color-primary);
-}
-.when-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.phone {
-  align-self: center;
-  width: 220px;
-  height: 400px;
-  padding: 8px;
-  box-sizing: border-box;
-  border-radius: 22px;
-  background: #11131a;
-}
-.screen {
-  position: relative;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 16px;
-  background: #46506a;
-}
-.screen-media {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.caption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 40px 12px 14px;
-  color: #fff;
-  font-size: 12px;
-  line-height: 1.5;
-  /* 底部压暗，白字在任何封面上都看得清 */
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
-}
-.caption-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-.caption-text {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
+.player {
+  align-self: flex-start;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  background: #000;
 }
 </style>

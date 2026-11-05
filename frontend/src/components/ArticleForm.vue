@@ -91,10 +91,7 @@
               <span class="tip">到公众号后台再手动群发或发表</span>
             </span>
           </label>
-          <el-form-item label="定时">
-            <el-date-picker v-model="form.scheduledAt" type="datetime" placeholder="不选则审核后点「发布」时提交" :disabled-date="(d) => d < startOfToday" style="width: 100%" />
-          </el-form-item>
-          <span class="tip">到点由本平台提交给公众号。审核通过点「发布」时还可以修改。</span>
+          <span class="tip">立即还是定时在审核通过后点「发布」时选。</span>
         </section>
 
         <section class="section">
@@ -124,7 +121,7 @@ import { ARTICLE_PLATFORMS } from '../platforms'
 import FormShell from './FormShell.vue'
 import PlatformIcon from './PlatformIcon.vue'
 
-// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建，定时要重新选。
+// 不传 postId 是新建，传了是修改；copyFrom 是复制已有内容新建。
 // 正文图片和封面不会随内容删除，复制的内容直接引用同一批图片
 const props = defineProps({
   postId: { type: Number, default: null },
@@ -147,7 +144,6 @@ const heading = computed(() => (postId ? '修改图文' : copyFrom ? '复制图�
 const editor = ref(null)
 const imageInput = ref(null)
 const submitting = ref(false)
-const startOfToday = new Date(new Date().setHours(0, 0, 0, 0))
 const form = reactive({
   title: '',
   author: '',
@@ -157,7 +153,6 @@ const form = reactive({
   openComment: false,
   draftOnly: true,
   accountId: null,
-  scheduledAt: null,
 })
 let saved = ''
 
@@ -234,7 +229,6 @@ async function submit(draft) {
       draft_only: form.draftOnly,
       account_id: lockedId.value ? null : form.accountId,
       category_id: postId ? null : category.value,
-      scheduled_at: form.scheduledAt ? form.scheduledAt.toISOString() : null,
       draft,
     }
     if (postId) await api.put(`/articles/${postId}`, body)
@@ -265,7 +259,6 @@ onMounted(async () => {
     if (postId) {
       category.value = post.category_id
       form.accountId = post.account?.id ?? null
-      form.scheduledAt = post.scheduled_at ? new Date(post.scheduled_at) : null
       reviewNote.value = post.review_note || ''
       canDraft.value = post.review_status === 'draft'
     }

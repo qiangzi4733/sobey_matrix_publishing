@@ -18,7 +18,7 @@
 <script setup>
 import { Close } from '@element-plus/icons-vue'
 
-// 发布视频、图文的全屏表单外框：顶栏放标题、发到哪里和提交按钮，下面左边填写、右边预览和检查
+// 发布视频、图文的全屏表单外框：顶栏放标题、发到哪里和提交按钮，下面填写；传了 aside 插槽时右边放预览和检查
 defineProps({ title: { type: String, required: true } })
 const emit = defineEmits(['close'])
 </script>
