@@ -14,8 +14,16 @@ class RegisterIn(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: EmailStr
+    # 登录页叫「用户名」，目前用户名就是邮箱；不按邮箱格式校验，输错时统一提示用户名或密码错误
+    email: str
     password: str
+    captcha_id: str
+    captcha_code: str
+
+
+class CaptchaOut(BaseModel):
+    captcha_id: str
+    svg: str
 
 
 class TokenOut(BaseModel):

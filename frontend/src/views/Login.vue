@@ -1,99 +1,88 @@
 <template>
   <div class="page">
-    <section class="intro">
-      <div class="brand">
-        <span class="logo" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
-            <circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="18" r="2.5" />
-            <path d="M8.5 6h7M6 8.5v7M18 8.5v7M8.5 18h7" />
-          </svg>
-        </span>
-        <span class="brand-name">矩阵分发</span>
-      </div>
-      <div class="pitch">
-        <h1>一个后台，管好所有新媒体账号</h1>
-        <p>抖音、视频号扫码登录，公众号授权发布。内容先审核再发布，定时、失败重试都在一处。</p>
-      </div>
-      <ul class="platforms">
-        <li v-for="p in PLATFORM_LIST" :key="p.key">
-          <span class="platform-icon"><PlatformIcon :platform="p.key" :size="20" /></span>
-          <span class="platform-name">{{ PLATFORMS[p.key] }}</span>
-          <span class="platform-how">{{ p.how }}</span>
-        </li>
-      </ul>
-    </section>
+    <div class="scene" aria-hidden="true">
+      <span class="slab slab-1" />
+      <span class="slab slab-2" />
+      <span class="slab slab-3" />
+      <span class="slab slab-4" />
+      <LoginIllustration class="illustration" />
+    </div>
 
-    <section class="form-side">
-      <el-form class="form" :model="form" label-position="top" @submit.prevent="submit">
-        <div class="switch" role="tablist" aria-label="登录或注册">
-          <button type="button" role="tab" :aria-selected="mode === 'login'" :class="{ active: mode === 'login' }" @click="mode = 'login'">登录</button>
-          <button type="button" role="tab" :aria-selected="mode === 'register'" :class="{ active: mode === 'register' }" @click="mode = 'register'">注册公司</button>
-        </div>
-        <div class="heading">
-          <h2>{{ mode === 'login' ? '欢迎回来' : '注册公司账号' }}</h2>
-          <span class="tip">{{ mode === 'login' ? '用注册时的邮箱登录' : '注册后你就是这家公司的第一个用户' }}</span>
-        </div>
-        <template v-if="mode === 'register'">
-          <el-form-item label="公司名称">
-            <el-input v-model="form.company_name" size="large" autocomplete="organization" />
-          </el-form-item>
-          <el-form-item label="你的姓名">
-            <el-input v-model="form.name" size="large" autocomplete="name" />
-          </el-form-item>
-        </template>
-        <el-form-item label="邮箱">
-          <el-input v-model="form.email" type="email" size="large" placeholder="name@company.com" autocomplete="email" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="form.password"
-            type="password"
-            size="large"
-            show-password
-            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-          />
-        </el-form-item>
-        <el-button type="primary" native-type="submit" size="large" :loading="loading" class="submit">
-          {{ mode === 'login' ? '登录' : '注册并登录' }}
-        </el-button>
-        <p class="tip center">
-          <template v-if="mode === 'login'">还没有账号？<el-button link type="primary" @click="mode = 'register'">注册公司</el-button></template>
-          <template v-else>已经有账号？<el-button link type="primary" @click="mode = 'login'">去登录</el-button></template>
-        </p>
-      </el-form>
-    </section>
+    <el-form class="card" :model="form" @submit.prevent="submit">
+      <h1 class="title">账号登录</h1>
+      <el-input
+        v-model="form.email"
+        class="field"
+        size="large"
+        placeholder="用户名"
+        :prefix-icon="User"
+        autocomplete="username"
+        aria-label="用户名"
+      />
+      <el-input
+        v-model="form.password"
+        class="field"
+        type="password"
+        size="large"
+        placeholder="密码"
+        :prefix-icon="Lock"
+        show-password
+        autocomplete="current-password"
+        aria-label="密码"
+      />
+      <div class="field captcha-row">
+        <el-input
+          v-model="form.captcha_code"
+          size="large"
+          placeholder="验证码"
+          :prefix-icon="CircleCheck"
+          maxlength="4"
+          autocomplete="off"
+          aria-label="验证码"
+        />
+        <button type="button" class="captcha" title="看不清？换一张" aria-label="验证码图片，点击换一张" @click="loadCaptcha">
+          <img v-if="captchaSrc" :src="captchaSrc" alt="" />
+        </button>
+      </div>
+      <button type="submit" class="submit" :disabled="loading">{{ loading ? '登录中…' : '登 录' }}</button>
+    </el-form>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { CircleCheck, Lock, User } from '@element-plus/icons-vue'
 
 import api, { setToken } from '../api'
-import PlatformIcon from '../components/PlatformIcon.vue'
-import { PLATFORMS } from '../platforms'
-
-const PLATFORM_LIST = [
-  { key: 'douyin', how: '扫码登录' },
-  { key: 'channels', how: '扫码登录' },
-  { key: 'wechat_mp', how: '授权发布' },
-  { key: 'kuaishou', how: '即将开放' },
-]
+import LoginIllustration from '../components/LoginIllustration.vue'
 
 const router = useRouter()
-const mode = ref('login')
 const loading = ref(false)
-const form = reactive({ company_name: '', name: '', email: '', password: '' })
+const captchaSrc = ref('')
+const form = reactive({ email: '', password: '', captcha_id: '', captcha_code: '' })
+
+async function loadCaptcha() {
+  const { data } = await api.get('/auth/captcha')
+  form.captcha_id = data.captcha_id
+  form.captcha_code = ''
+  captchaSrc.value = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.svg)}`
+}
+
+onMounted(loadCaptcha)
 
 async function submit() {
+  if (!form.email.trim() || !form.password) return ElMessage.warning('请输入用户名和密码')
+  if (!form.captcha_code.trim()) return ElMessage.warning('请输入验证码')
   loading.value = true
   try {
-    const { data } =
-      mode.value === 'login'
-        ? await api.post('/auth/login', { email: form.email, password: form.password })
-        : await api.post('/auth/register', form)
+    const { data } = await api.post('/auth/login', form)
     setToken(data.access_token)
-    router.push('/')
+    router.push({ name: 'portal' })
+  } catch {
+    // 验证码用一次就作废，不管哪种失败都换一张
+    loadCaptcha()
   } finally {
     loading.value = false
   }
@@ -102,140 +91,141 @@ async function submit() {
 
 <style scoped>
 .page {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  min-height: 100%;
-  background: #fff;
+  align-items: center;
+  min-height: 100vh;
+  min-width: 1100px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 60% 70% at 30% 55%, rgba(120, 165, 255, 0.28), transparent 70%),
+    radial-gradient(ellipse 50% 50% at 85% 20%, rgba(255, 255, 255, 0.9), transparent 70%),
+    linear-gradient(160deg, #eef4ff 0%, #e3ecfd 45%, #edf2fd 100%);
 }
-.intro {
-  flex: 1 1 440px;
+/* 背景里斜铺的浅色板块和细线，模仿等距视角的桌面 */
+.scene {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(-28deg, transparent 49.85%, rgba(255, 255, 255, 0.85) 50%, transparent 50.15%),
+    linear-gradient(-28deg, transparent 49.85%, rgba(255, 255, 255, 0.7) 50%, transparent 50.15%),
+    linear-gradient(32deg, transparent 49.85%, rgba(255, 255, 255, 0.6) 50%, transparent 50.15%);
+  background-size: 100% 100%, 100% 100%, 100% 100%;
+  background-position: 0 -22vh, 0 26vh, 0 8vh;
+  background-repeat: no-repeat;
+}
+.slab {
+  position: absolute;
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.75), rgba(226, 235, 252, 0.55));
+  box-shadow: 0 30px 60px rgba(88, 120, 190, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transform: rotate(-28deg) skewX(28deg);
+}
+.slab-1 { width: 300px; height: 190px; left: 4%; bottom: 6%; }
+.slab-2 { width: 260px; height: 160px; left: 58%; top: 30%; opacity: 0.8; }
+.slab-3 { width: 380px; height: 220px; left: 46%; bottom: -8%; opacity: 0.7; }
+.slab-4 { width: 220px; height: 140px; left: 70%; top: -4%; opacity: 0.6; }
+.illustration {
+  position: absolute;
+  left: 11%;
+  top: 50%;
+  width: min(40vw, 600px);
+  transform: translateY(-48%);
+}
+
+.card {
+  position: relative;
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 40px;
-  padding: 48px 64px;
-  background: #14213d;
-  color: #fff;
+  width: 412px;
+  margin-left: auto;
+  margin-right: 15%;
+  padding: 44px 44px 52px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(60, 100, 180, 0.16);
 }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: var(--el-color-primary);
-}
-.brand-name {
-  font-size: 17px;
-  font-weight: 700;
-}
-.pitch {
-  margin-top: auto;
-  max-width: 460px;
-}
-h1 {
-  margin: 0 0 16px;
-  font-size: 34px;
-  line-height: 1.3;
-  text-wrap: balance;
-}
-.pitch p {
-  margin: 0;
+.title {
+  position: relative;
+  margin: 0 0 28px;
+  text-align: center;
   font-size: 16px;
-  line-height: 1.7;
-  color: #c9d2e6;
+  font-weight: 700;
+  color: #1748d0;
 }
-.platforms {
-  list-style: none;
-  margin: 0 0 auto;
+.title::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 28px;
+  height: 3px;
+  margin-left: -14px;
+  border-radius: 2px;
+  background: #2b63f0;
+}
+.field {
+  margin-bottom: 18px;
+}
+/* 设计稿里的输入框是浅蓝色胶囊，没有边框，靠阴影浮起 */
+.card :deep(.el-input__wrapper) {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 22px;
+  background: #eef3fc;
+  box-shadow: 0 4px 10px rgba(80, 110, 170, 0.1);
+}
+.card :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px #6d8cf0 inset, 0 4px 10px rgba(80, 110, 170, 0.1);
+}
+.card :deep(.el-input__prefix) {
+  color: #8a93a6;
+}
+.captcha-row {
+  position: relative;
+}
+.captcha-row :deep(.el-input__wrapper) {
+  padding-right: 112px;
+}
+.captcha {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 100px;
+  height: 36px;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 360px;
-}
-.platforms li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.platform-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: #fff;
-}
-.platform-name {
-  flex: 1;
-}
-.platform-how {
-  font-size: 13px;
-  color: #c9d2e6;
-}
-.form-side {
-  flex: 1 1 440px;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 24px;
-}
-.form {
-  width: 100%;
-  max-width: 380px;
-}
-.switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  padding: 4px;
-  margin-bottom: 24px;
-  border-radius: 10px;
-  background: #f0f1f3;
-}
-.switch button {
-  height: 38px;
   border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font: inherit;
-  color: var(--el-text-color-secondary);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #eef4f8;
   cursor: pointer;
 }
-.switch button.active {
-  background: #fff;
-  color: var(--el-text-color-primary);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(26, 29, 35, 0.12);
-}
-.heading {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 20px;
-}
-h2 {
-  margin: 0;
-  font-size: 24px;
-}
-.tip {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+.captcha img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .submit {
+  display: block;
   width: 100%;
-  margin-top: 4px;
+  height: 44px;
+  margin-top: 26px;
+  border: 0;
+  border-radius: 22px;
+  background: linear-gradient(90deg, #0a3fd9 0%, #1677ff 55%, #13c6f5 100%);
+  box-shadow: 0 8px 18px rgba(22, 100, 240, 0.28);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  cursor: pointer;
 }
-.center {
-  margin: 16px 0 0;
-  text-align: center;
+.submit:hover {
+  filter: brightness(1.06);
+}
+.submit:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 </style>

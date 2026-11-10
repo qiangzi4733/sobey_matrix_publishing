@@ -7,15 +7,18 @@ import WechatMpCallback from './views/WechatMpCallback.vue'
 import Categories from './views/Categories.vue'
 import Contents from './views/Contents.vue'
 import Dashboard from './views/Dashboard.vue'
+import Portal from './views/Portal.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: Login },
+    // 登录后先到智媒平台门户，矩阵分发是门户里的一个模块
+    { path: '/portal', name: 'portal', component: Portal },
     {
       path: '/',
       component: Layout,
-      redirect: '/dashboard',
+      redirect: '/portal',
       children: [
         { path: 'dashboard', name: 'dashboard', component: Dashboard },
         { path: 'accounts', name: 'accounts', component: Accounts },

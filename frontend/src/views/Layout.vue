@@ -13,6 +13,10 @@
           <span class="tenant">{{ me?.tenant_name }}</span>
         </span>
       </div>
+      <router-link to="/portal" class="item back">
+        <el-icon :size="18"><Back /></el-icon>
+        <span class="item-label">返回门户</span>
+      </router-link>
 
       <router-link v-for="item in NAV" :key="item.to" :to="item.to" class="item" active-class="active">
         <el-icon :size="18"><component :is="item.icon" /></el-icon>
@@ -36,7 +40,7 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Document, FolderOpened, House, User } from '@element-plus/icons-vue'
+import { Back, Document, FolderOpened, House, User } from '@element-plus/icons-vue'
 
 import api, { clearToken } from '../api'
 import { badges, refreshBadges } from '../badges'
@@ -129,6 +133,11 @@ function logout() {
   border-radius: 8px;
   color: var(--el-text-color-regular);
   text-decoration: none;
+}
+.back {
+  margin-bottom: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 .item:hover {
   background: var(--el-fill-color-light);

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from app import captcha
 from app.deps import CurrentUser, DbSession
 from app.models import Tenant, User, UserRole
-from app.schemas import LoginIn, RegisterIn, TokenOut, UserOut
+from app.schemas import CaptchaOut, LoginIn, RegisterIn, TokenOut, UserOut
 from app.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -40,11 +41,20 @@ def register(body: RegisterIn, db: DbSession) -> TokenOut:
     return TokenOut(access_token=create_access_token(user.id))
 
 
+@router.get("/captcha", response_model=CaptchaOut)
+def get_captcha() -> CaptchaOut:
+    captcha_id, svg = captcha.create()
+    return CaptchaOut(captcha_id=captcha_id, svg=svg)
+
+
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, db: DbSession) -> TokenOut:
-    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    # 先核验证码再查密码，验证码不对时不暴露账号是否存在
+    if not captcha.verify(body.captcha_id, body.captcha_code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "验证码错误或已过期")
+    user = db.scalar(select(User).where(User.email == body.email.strip().lower()))
     if user is None or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "邮箱或密码错误")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
     return TokenOut(access_token=create_access_token(user.id))
 
 
